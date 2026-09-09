@@ -1,0 +1,12 @@
+[package]
+name = "polyglot-mlir"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Polyglot MLIR integration - Rust bindings to MLIR C API"
+
+[dependencies]
+anyhow = { workspace = true }
+mlir-sys = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

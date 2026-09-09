@@ -1,0 +1,464 @@
+#!/usr/bin/env python3
+"""
+Polyglot - Universal Compiler Driver
+A simple driver that uses clang directly for the MVP.
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+import tempfile
+import shutil
+from pathlib import Path
+
+
+class PolyglotDriver:
+    def __init__(self):
+        self.clang_path = shutil.which("clang")
+        self.clangxx_path = shutil.which("clang++")
+        if not self.clang_path:
+            print("Error: clang not found in PATH", file=sys.stderr)
+            sys.exit(1)
+
+    def build(self, args):
+        """Build source file(s) or project."""
+        paths = [Path(p) for p in args.paths] if args.paths else [Path(".")]
+
+        # Determine output path
+        output_path = getattr(args, 'output', None)
+        if output_path:
+            output = Path(output_path)
+        elif len(paths) == 1 and paths[0].is_file():
+            output = paths[0].with_suffix("")
+        else:
+            output = Path("a.out")
+
+        # Determine source files
+        if len(paths) == 1 and paths[0].is_dir() and paths[0].joinpath("polyglot.toml").exists():
+            # Project build
+            project_dir = paths[0]
+            source_files, output = self._find_project_source_and_output(project_dir, output)
+            if not source_files:
+                print(f"Error: No source file found in project at {project_dir}", file=sys.stderr)
+                sys.exit(1)
+            # Convert single source to list
+            source_files = [source_files] if isinstance(source_files, Path) else source_files
+        else:
+            # Multiple source files
+            source_files = paths
+            for f in source_files:
+                if not f.exists():
+                    print(f"Error: Source file not found: {f}", file=sys.stderr)
+                    sys.exit(1)
+                if f.is_dir():
+                    print(f"Error: Expected source file, got directory: {f}", file=sys.stderr)
+                    sys.exit(1)
+
+        # Build using clang
+        self._build_with_clang(source_files, output, args.target, args.opt_level)
+        print(f"Built {', '.join(str(f) for f in source_files)} -> {output}")
+
+    def _find_project_source_and_output(self, project_dir, default_output):
+        """Find the main source file and output from polyglot.toml."""
+        config_file = project_dir / "polyglot.toml"
+        if not config_file.exists():
+            return None, default_output
+
+        try:
+            import toml
+            with open(config_file) as f:
+                config = toml.load(f)
+
+            bins = config.get("bin", [])
+            if bins and "source" in bins[0]:
+                source_file = project_dir / bins[0]["source"]
+                # Use binary name from config if available
+                output_name = bins[0].get("name")
+                if output_name:
+                    output_file = project_dir / output_name
+                else:
+                    output_file = default_output
+                return source_file, output_file
+        except Exception as e:
+            print(f"DEBUG: Config parse error: {e}", file=sys.stderr)
+
+        # Fallback
+        src_dir = project_dir / "src"
+        for ext in [".c", ".cpp", ".cc", ".cxx"]:
+            for f in src_dir.glob(f"*{ext}"):
+                return f, default_output
+        return None, default_output
+
+    def _build_with_clang(self, source_files, output_file, target, opt_level):
+        """Build using clang directly."""
+        # Determine compiler based on first C++ file, or use clang
+        has_cpp = any(f.suffix in [".cpp", ".cc", ".cxx", ".c++"] for f in source_files)
+        compiler = self.clangxx_path if has_cpp else self.clang_path
+        cmd = [compiler] + [str(f) for f in source_files] + ["-o", str(output_file)]
+
+        if target:
+            cmd.append(f"--target={target}")
+
+        # Optimization level
+        opt_map = {
+            "none": "-O0",
+            "less": "-O1",
+            "default": "-O2",
+            "aggressive": "-O3",
+            "size": "-Os",
+            "size-aggressive": "-Oz",
+        }
+        cmd.append(opt_map.get(opt_level, "-O2"))
+
+        print(f"Running: {' '.join(cmd)}")
+        result = subprocess.run(cmd)
+        if result.returncode != 0:
+            print(f"Compilation failed with exit code {result.returncode}", file=sys.stderr)
+            sys.exit(result.returncode)
+
+    def run(self, args):
+        """Build and run a source file."""
+        source_file = Path(args.file)
+
+        # Build to temporary executable
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exe_path = Path(tmpdir) / "polyglot_run"
+            self._build_with_clang([source_file], exe_path, args.target, args.opt_level)
+
+            # Run the executable
+            cmd = [str(exe_path)] + args.args
+            result = subprocess.run(cmd)
+            sys.exit(result.returncode)
+
+    def check(self, args):
+        """Check syntax without building (emit nothing)."""
+        for path_str in args.paths:
+            source_file = Path(path_str)
+            if not source_file.exists():
+                print(f"Error: Source file not found: {source_file}", file=sys.stderr)
+                sys.exit(1)
+
+            # Use clang with -fsyntax-only
+            has_cpp = source_file.suffix in [".cpp", ".cc", ".cxx", ".c++"]
+            compiler = self.clangxx_path if has_cpp else self.clang_path
+
+            cmd = [compiler, "-fsyntax-only", str(source_file)]
+            if args.target:
+                cmd.append(f"--target={args.target}")
+
+            print(f"Checking {source_file}...")
+            result = subprocess.run(cmd)
+            if result.returncode != 0:
+                print(f"Syntax check failed for {source_file}", file=sys.stderr)
+                sys.exit(result.returncode)
+
+        print("All files passed syntax check")
+
+    def emit_ir(self, args):
+        """Emit LLVM IR."""
+        source_files = [Path(p) for p in args.paths]
+        for f in source_files:
+            if not f.exists():
+                print(f"Error: Source file not found: {f}", file=sys.stderr)
+                sys.exit(1)
+
+        has_cpp = any(f.suffix in [".cpp", ".cc", ".cxx", ".c++"] for f in source_files)
+        compiler = self.clangxx_path if has_cpp else self.clang_path
+
+        cmd = [compiler] + [str(f) for f in source_files] + ["-S", "-emit-llvm"]
+
+        if args.target:
+            cmd.append(f"--target={args.target}")
+
+        if args.output:
+            cmd.extend(["-o", args.output])
+        else:
+            # Default to stdout
+            pass
+
+        print(f"Emitting IR: {' '.join(cmd)}")
+        result = subprocess.run(cmd)
+        if result.returncode != 0:
+            print(f"IR emission failed", file=sys.stderr)
+            sys.exit(result.returncode)
+
+    def emit_asm(self, args):
+        """Emit assembly."""
+        source_files = [Path(p) for p in args.paths]
+        for f in source_files:
+            if not f.exists():
+                print(f"Error: Source file not found: {f}", file=sys.stderr)
+                sys.exit(1)
+
+        has_cpp = any(f.suffix in [".cpp", ".cc", ".cxx", ".c++"] for f in source_files)
+        compiler = self.clangxx_path if has_cpp else self.clang_path
+
+        cmd = [compiler] + [str(f) for f in source_files] + ["-S"]
+
+        if args.target:
+            cmd.append(f"--target={args.target}")
+
+        if args.output:
+            cmd.extend(["-o", args.output])
+
+        print(f"Emitting assembly: {' '.join(cmd)}")
+        result = subprocess.run(cmd)
+        if result.returncode != 0:
+            print(f"Assembly emission failed", file=sys.stderr)
+            sys.exit(result.returncode)
+
+    def clean(self, args):
+        """Clean build artifacts."""
+        project_dir = Path(args.path)
+
+        # Remove common build artifacts
+        patterns = ["*.o", "*.obj", "*.exe", "a.out", "*.ll", "*.s", "*.bc"]
+        removed = 0
+
+        for pattern in patterns:
+            for f in project_dir.glob(pattern):
+                if f.is_file():
+                    f.unlink()
+                    print(f"Removed {f}")
+                    removed += 1
+
+        # Also check for executable with project name (from polyglot.toml)
+        config_file = project_dir / "polyglot.toml"
+        if config_file.exists():
+            try:
+                import toml
+                with open(config_file) as f:
+                    config = toml.load(f)
+                bins = config.get("bin", [])
+                for bin_cfg in bins:
+                    name = bin_cfg.get("name")
+                    if name:
+                        exe = project_dir / name
+                        if exe.exists():
+                            exe.unlink()
+                            print(f"Removed {exe}")
+                            removed += 1
+            except Exception:
+                pass
+
+        if removed == 0:
+            print("No build artifacts to clean")
+        else:
+            print(f"Cleaned {removed} artifacts")
+
+    def init(self, args):
+        """Initialize a new project."""
+        name = args.name or "my-project"
+        language = args.language or "c"
+
+        project_dir = Path(name)
+        project_dir.mkdir(exist_ok=True)
+
+        # Use basename for project name to avoid path issues
+        project_name = project_dir.name
+
+        plugin_name = "clang" if language in ("c", "cpp") else "rustc"
+        ext = "cpp" if language == "cpp" else "c"
+
+        config = f"""[project]
+name = "{project_name}"
+version = "0.1.0"
+
+[target]
+triple = "{os.uname().machine}-unknown-linux-gnu"
+opt_level = 2
+
+[plugins]
+{plugin_name} = "0.1"
+
+[[bin]]
+name = "{project_name}"
+source = "src/main.{ext}"
+"""
+        (project_dir / "polyglot.toml").write_text(config)
+
+        # Create source directory
+        src_dir = project_dir / "src"
+        src_dir.mkdir(exist_ok=True)
+
+        # Create sample source file
+        if language == "cpp":
+            sample = '''#include <iostream>
+
+int main() {
+    std::cout << "Hello from Polyglot!" << std::endl;
+    return 0;
+}
+'''
+        else:
+            sample = '''#include <stdio.h>
+
+int main() {
+    printf("Hello from Polyglot!\\n");
+    return 0;
+}
+'''
+        (src_dir / f"main.{ext}").write_text(sample)
+
+        print(f"Project created at: {project_dir}")
+        print("Run 'polyglot build' to build.")
+
+    def stats(self, args):
+        """Show compilation statistics."""
+        source_files = [Path(p) for p in args.paths]
+        for f in source_files:
+            if not f.exists():
+                print(f"Error: Source file not found: {f}", file=sys.stderr)
+                sys.exit(1)
+
+        has_cpp = any(f.suffix in [".cpp", ".cc", ".cxx", ".c++"] for f in source_files)
+        compiler = self.clangxx_path if has_cpp else self.clang_path
+
+        print("=" * 60)
+        print("COMPILATION STATISTICS")
+        print("=" * 60)
+        print(f"Source files: {len(source_files)}")
+        for f in source_files:
+            size = f.stat().st_size
+            lines = len(f.read_text().splitlines())
+            print(f"  {f}: {size} bytes, {lines} lines")
+
+        print(f"\nTarget: {args.target or 'native'}")
+        print(f"Optimization: {args.opt_level}")
+
+        # Compile with stats
+        has_cpp = any(f.suffix in [".cpp", ".cc", ".cxx", ".c++"] for f in source_files)
+        compiler = self.clangxx_path if has_cpp else self.clang_path
+
+        cmd = [compiler] + [str(f) for f in source_files] + ["-o", "/dev/null"]
+        if args.target:
+            cmd.append(f"--target={args.target}")
+
+        opt_map = {
+            "none": "-O0", "less": "-O1", "default": "-O2",
+            "aggressive": "-O3", "size": "-Os", "size-aggressive": "-Oz",
+        }
+        cmd.append(opt_map.get(args.opt_level, "-O2"))
+        cmd.extend(["-ftime-report", "-fno-discard-value-names"])
+
+        print(f"\nRunning: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            print(f"Compilation failed: {result.stderr}", file=sys.stderr)
+            sys.exit(result.returncode)
+
+        # Parse time report
+        print("\n" + "-" * 60)
+        print("CLANG TIME REPORT")
+        print("-" * 60)
+        for line in result.stderr.splitlines():
+            if any(keyword in line.lower() for keyword in ["time", "memory", "bytes", "instructions", "blocks"]):
+                print(f"  {line.strip()}")
+
+        # Also show binary size with default optimization
+        with tempfile.NamedTemporaryFile(suffix=".out", delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            build_cmd = [compiler] + [str(f) for f in source_files] + ["-o", tmp_path]
+            if args.target:
+                build_cmd.append(f"--target={args.target}")
+            build_cmd.append(opt_map.get(args.opt_level, "-O2"))
+            subprocess.run(build_cmd, capture_output=True)
+            if os.path.exists(tmp_path):
+                size = os.path.getsize(tmp_path)
+                print(f"\nBinary size: {size:,} bytes")
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+        print("\n" + "=" * 60)
+
+    def version(self):
+        print("polyglot 0.1.0")
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="polyglot", description="Universal Compiler Driver")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+    parser.add_argument("--target", help="Target triple")
+    parser.add_argument("--opt-level", choices=["none", "less", "default", "aggressive", "size", "size-aggressive"],
+                       default="default", help="Optimization level")
+    parser.add_argument("-o", "--output", help="Output file")
+    parser.add_argument("--plugin", help="Plugin to use")
+    parser.add_argument("--plugin-dir", default="~/.polyglot/plugins", help="Plugin directory")
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # Build command
+    build_parser = subparsers.add_parser("build", help="Build a source file or project")
+    build_parser.add_argument("paths", nargs="*", help="Source files or project directory")
+    build_parser.add_argument("-o", "--output", help="Output file")
+
+    # Run command
+    run_parser = subparsers.add_parser("run", help="Build and run a source file")
+    run_parser.add_argument("file", help="Source file to run")
+    run_parser.add_argument("args", nargs=argparse.REMAINDER, help="Program arguments")
+
+    # Check command (syntax check only)
+    check_parser = subparsers.add_parser("check", help="Check syntax without building")
+    check_parser.add_argument("paths", nargs="+", help="Source files to check")
+
+    # Emit IR command
+    ir_parser = subparsers.add_parser("emit-ir", help="Emit LLVM IR")
+    ir_parser.add_argument("paths", nargs="+", help="Source files")
+    ir_parser.add_argument("-o", "--output", help="Output file")
+
+    # Emit Assembly command
+    asm_parser = subparsers.add_parser("emit-asm", help="Emit assembly")
+    asm_parser.add_argument("paths", nargs="+", help="Source files")
+    asm_parser.add_argument("-o", "--output", help="Output file")
+
+    # Clean command
+    clean_parser = subparsers.add_parser("clean", help="Clean build artifacts")
+    clean_parser.add_argument("path", nargs="?", default=".", help="Project directory")
+
+    # Stats command
+    stats_parser = subparsers.add_parser("stats", help="Show compilation statistics")
+    stats_parser.add_argument("paths", nargs="+", help="Source files")
+    stats_parser.add_argument("--target", help="Target triple")
+    stats_parser.add_argument("--opt-level", choices=["none", "less", "default", "aggressive", "size", "size-aggressive"],
+                       default="default", help="Optimization level")
+
+    # Init command
+    init_parser = subparsers.add_parser("init", help="Initialize a new project")
+    init_parser.add_argument("name", nargs="?", help="Project name")
+    init_parser.add_argument("--language", choices=["c", "cpp", "rust"], help="Language")
+
+    # Version command
+    subparsers.add_parser("version", help="Show version")
+
+    args = parser.parse_args()
+
+    driver = PolyglotDriver()
+
+    if args.command == "build":
+        driver.build(args)
+    elif args.command == "run":
+        driver.run(args)
+    elif args.command == "check":
+        driver.check(args)
+    elif args.command == "emit-ir":
+        driver.emit_ir(args)
+    elif args.command == "emit-asm":
+        driver.emit_asm(args)
+    elif args.command == "clean":
+        driver.clean(args)
+    elif args.command == "stats":
+        driver.stats(args)
+    elif args.command == "init":
+        driver.init(args)
+    elif args.command == "version":
+        driver.version()
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

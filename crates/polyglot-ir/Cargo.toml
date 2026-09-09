@@ -1,0 +1,13 @@
+[package]
+name = "polyglot-ir"
+description = "Polyglot intermediate representation: AST lowering, optimization passes and textual printing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+polyglot-core = { workspace = true }
+polyglot-syntax = { workspace = true }
+polyglot-sema = { workspace = true }
+anyhow = { workspace = true }

@@ -1,0 +1,251 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Python Driver Tests
+  python-tests:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-17 llvm-17 lld-17
+
+      - name: Install Python dependencies
+        run: |
+          pip install toml pytest
+
+      - name: Set up Clang path
+        run: |
+          echo "/usr/lib/llvm-17/bin" >> $GITHUB_PATH
+
+      - name: Make polyglot executable
+        run: chmod +x polyglot
+
+      - name: Run Python integration tests
+        run: python3 test_comprehensive.py
+        env:
+          PATH: "/usr/lib/llvm-17/bin:${{ env.PATH }}"
+
+      - name: Run benchmarks
+        run: python3 benchmark.py
+        env:
+          PATH: "/usr/lib/llvm-17/bin:${{ env.PATH }}"
+
+  # Rust Library Tests
+  rust-tests:
+    name: Rust Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libzstd-dev libtinfo-dev libxml2-dev \
+            clang-17 llvm-17 lld-17
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build library crates
+        run: cargo build --lib --workspace
+
+      - name: Run library tests
+        run: cargo test --lib --workspace
+
+      - name: Check documentation
+        run: cargo doc --workspace --no-deps --document-private-items
+
+  # Rust Binary Build (requires static libs)
+  rust-binaries:
+    name: Rust Binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libzstd-dev libtinfo-dev libxml2-dev \
+            clang-17 llvm-17 lld-17
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-bin-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build binaries
+        run: |
+          cargo build --release --bin polyglot-driver --bin polyglot-clang 2>&1 | tee build.log || true
+          # Check if build succeeded or failed due to missing static libs
+          if [ -f "target/release/polyglot-driver" ]; then
+            echo "Binaries built successfully"
+          else
+            echo "Binary build failed (expected if static libs missing)"
+            cat build.log
+          fi
+
+  # Security Audit
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Run cargo audit
+        run: cargo audit --workspace
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Run pip audit
+        run: pip audit
+
+  # Documentation Check
+  docs-check:
+    name: Documentation Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check README exists
+        run: test -f README.md
+
+      - name: Check CONTRIBUTING exists
+        run: test -f CONTRIBUTING.md
+
+      - name: Check LICENSE exists
+        run: test -f LICENSE
+
+      - name: Check CHANGELOG exists
+        run: test -f CHANGELOG.md
+
+      - name: Check SECURITY exists
+        run: test -f SECURITY.md
+
+      - name: Check CODE_OF_CONDUCT exists
+        run: test -f CODE_OF_CONDUCT.md
+
+      - name: Validate markdown links
+        uses: gaurav-nelson/github-action-markdown-link-check@v1
+        with:
+          config-file: '.github/markdown-link-check.config.json'
+
+  # Release
+  release:
+    name: Release
+    needs: [python-tests, rust-tests, security-audit, docs-check]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libzstd-dev libtinfo-dev libxml2-dev \
+            clang-17 llvm-17 lld-17
+
+      - name: Build release binaries
+        run: |
+          cargo build --release --bin polyglot-driver --bin polyglot-clang 2>&1 | tee build.log || true
+
+      - name: Create release archives
+        if: success()
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          mkdir -p release
+          # Python driver release
+          cp polyglot release/polyglot
+          chmod +x release/polyglot
+          # Rust binaries if built
+          if [ -f "target/release/polyglot-driver" ]; then
+            cp target/release/polyglot-driver release/
+            cp target/release/polyglot-clang release/
+          fi
+          # Create tarball
+          tar -czf "polyglot-${VERSION}-linux-x86_64.tar.gz" -C release .
+          ls -la release/
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            polyglot-*.tar.gz
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

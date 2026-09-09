@@ -1,0 +1,1 @@
+{"nodes": [{"id": "pkg_polyglot_core", "label": "polyglot-core", "file_type": "code", "type": "package", "ecosystem": "cargo", "source_file": "crates/polyglot-core/Cargo.toml", "source_location": "L1"}], "edges": []}

@@ -1,0 +1,296 @@
+{
+  "Cargo.toml": {
+    "mtime": 1787422933.6112146,
+    "seen": 1787592533.1075206,
+    "ast_hash": "1b2c065a10ac2734281262687bb97b98",
+    "semantic_hash": "1b2c065a10ac2734281262687bb97b98"
+  },
+  "crates/polyglot-codegen/Cargo.toml": {
+    "mtime": 1787427691.7799335,
+    "seen": 1787592533.1075282,
+    "ast_hash": "6473caac23502848a59baafb19467404",
+    "semantic_hash": "6473caac23502848a59baafb19467404"
+  },
+  "crates/polyglot-codegen/src/lib.rs": {
+    "mtime": 1787429090.0259445,
+    "seen": 1787592533.1075313,
+    "ast_hash": "b497d3a79d463ef4d97a23eeee795c0b",
+    "semantic_hash": "b497d3a79d463ef4d97a23eeee795c0b"
+  },
+  "crates/polyglot-core/Cargo.toml": {
+    "mtime": 1787422966.5711482,
+    "seen": 1787592533.1075332,
+    "ast_hash": "efd9cdbc593855441254b364c2defd31",
+    "semantic_hash": "efd9cdbc593855441254b364c2defd31"
+  },
+  "crates/polyglot-core/src/diag.rs": {
+    "mtime": 1787423141.500688,
+    "seen": 1787592533.107535,
+    "ast_hash": "9a3137eef23d92938c08b3107d52bf4b",
+    "semantic_hash": "9a3137eef23d92938c08b3107d52bf4b"
+  },
+  "crates/polyglot-core/src/lib.rs": {
+    "mtime": 1787422972.5697684,
+    "seen": 1787592533.1075363,
+    "ast_hash": "e5163574f0cb7e35564042f2de135e39",
+    "semantic_hash": "e5163574f0cb7e35564042f2de135e39"
+  },
+  "crates/polyglot-core/src/span.rs": {
+    "mtime": 1787423967.6493847,
+    "seen": 1787592533.1075385,
+    "ast_hash": "6ecb35c8a0e7a821cb6d55777483efb9",
+    "semantic_hash": "6ecb35c8a0e7a821cb6d55777483efb9"
+  },
+  "crates/polyglot-core/src/ty.rs": {
+    "mtime": 1787423083.6315622,
+    "seen": 1787592533.10754,
+    "ast_hash": "1109bd1a30f724a7a9176f2f84d145b5",
+    "semantic_hash": "1109bd1a30f724a7a9176f2f84d145b5"
+  },
+  "crates/polyglot-driver/Cargo.toml": {
+    "mtime": 1787427935.041016,
+    "seen": 1787592533.1075416,
+    "ast_hash": "38f6b6965b5e3c2dbc4217a8f4c36397",
+    "semantic_hash": "38f6b6965b5e3c2dbc4217a8f4c36397"
+  },
+  "crates/polyglot-driver/src/cli.rs": {
+    "mtime": 1787428119.1567461,
+    "seen": 1787592533.107543,
+    "ast_hash": "5dcc63135d477aeaa8890f2a4420dff2",
+    "semantic_hash": "5dcc63135d477aeaa8890f2a4420dff2"
+  },
+  "crates/polyglot-driver/src/main.rs": {
+    "mtime": 1787428146.4246352,
+    "seen": 1787592533.107545,
+    "ast_hash": "7fada4675e5d32511b5e82f0d1428ac4",
+    "semantic_hash": "7fada4675e5d32511b5e82f0d1428ac4"
+  },
+  "crates/polyglot-ir/Cargo.toml": {
+    "mtime": 1787425051.898709,
+    "seen": 1787592533.1075466,
+    "ast_hash": "b96e4775d92dd58e842cf83d19c9939b",
+    "semantic_hash": "b96e4775d92dd58e842cf83d19c9939b"
+  },
+  "crates/polyglot-ir/src/lib.rs": {
+    "mtime": 1787427713.1462681,
+    "seen": 1787592533.1075482,
+    "ast_hash": "631af83c3d8374031576ae0334e90d71",
+    "semantic_hash": "631af83c3d8374031576ae0334e90d71"
+  },
+  "crates/polyglot-ir/src/lower.rs": {
+    "mtime": 1787429090.0269444,
+    "seen": 1787592533.1075497,
+    "ast_hash": "f2f66e36c9b3d0bc569322ed4920dd47",
+    "semantic_hash": "f2f66e36c9b3d0bc569322ed4920dd47"
+  },
+  "crates/polyglot-ir/src/opt.rs": {
+    "mtime": 1787428899.9614527,
+    "seen": 1787592533.1075513,
+    "ast_hash": "ec5712ac52c7580247b6d7a1262b5efa",
+    "semantic_hash": "ec5712ac52c7580247b6d7a1262b5efa"
+  },
+  "crates/polyglot-ir/src/print.rs": {
+    "mtime": 1787428301.1966643,
+    "seen": 1787592533.1075528,
+    "ast_hash": "e942491044ee2890c8c1556e3d1239d1",
+    "semantic_hash": "e942491044ee2890c8c1556e3d1239d1"
+  },
+  "crates/polyglot-sema/Cargo.toml": {
+    "mtime": 1787424382.2595181,
+    "seen": 1787592533.1075542,
+    "ast_hash": "ba65fa1ef15c6fad123138f776c80f59",
+    "semantic_hash": "ba65fa1ef15c6fad123138f776c80f59"
+  },
+  "crates/polyglot-sema/src/lib.rs": {
+    "mtime": 1787432113.221216,
+    "seen": 1787592533.107556,
+    "ast_hash": "ed64f1200c8c6d3fd297a088e08184f3",
+    "semantic_hash": "ed64f1200c8c6d3fd297a088e08184f3"
+  },
+  "crates/polyglot-syntax/Cargo.toml": {
+    "mtime": 1787423896.7297766,
+    "seen": 1787592533.1075578,
+    "ast_hash": "d4736c6f85864efa15ad994f5b259513",
+    "semantic_hash": "d4736c6f85864efa15ad994f5b259513"
+  },
+  "crates/polyglot-syntax/src/ast.rs": {
+    "mtime": 1787425042.2443311,
+    "seen": 1787592533.1075592,
+    "ast_hash": "a64cd6f3613d6d75fa9cdd42dffb5656",
+    "semantic_hash": "a64cd6f3613d6d75fa9cdd42dffb5656"
+  },
+  "crates/polyglot-syntax/src/lex.rs": {
+    "mtime": 1787424029.0706975,
+    "seen": 1787592533.1075609,
+    "ast_hash": "9c39796949c7fe561f637b6e0a2b93b9",
+    "semantic_hash": "9c39796949c7fe561f637b6e0a2b93b9"
+  },
+  "crates/polyglot-syntax/src/lib.rs": {
+    "mtime": 1787423238.6230316,
+    "seen": 1787592533.1075623,
+    "ast_hash": "e883970c78a3c6e791939552db90de16",
+    "semantic_hash": "e883970c78a3c6e791939552db90de16"
+  },
+  "crates/polyglot-syntax/src/parse.rs": {
+    "mtime": 1787428728.6866605,
+    "seen": 1787592533.1075644,
+    "ast_hash": "98c87eecd31130212df922219cafadd1",
+    "semantic_hash": "98c87eecd31130212df922219cafadd1"
+  },
+  "crates/polyglot-syntax/src/preprocess.rs": {
+    "mtime": 1787424151.462318,
+    "seen": 1787592533.1075659,
+    "ast_hash": "29ba1c89e0272eb7b500554f754119ca",
+    "semantic_hash": "29ba1c89e0272eb7b500554f754119ca"
+  },
+  "crates/polyglot-syntax/tests/parser.rs": {
+    "mtime": 1787424211.147727,
+    "seen": 1787592533.1075675,
+    "ast_hash": "babdbd663e7e326c2c8a31c491e3d163",
+    "semantic_hash": "babdbd663e7e326c2c8a31c491e3d163"
+  },
+  "examples/01_hello.c": {
+    "mtime": 1786962032.5037582,
+    "seen": 1787592533.1075692,
+    "ast_hash": "4aa56399b7ffa88366ce29a44ecd927a",
+    "semantic_hash": "4aa56399b7ffa88366ce29a44ecd927a"
+  },
+  "examples/02_arithmetic.c": {
+    "mtime": 1786962081.6332624,
+    "seen": 1787592533.1075706,
+    "ast_hash": "9b833c266491d4f8ac39835fdfbf5160",
+    "semantic_hash": "9b833c266491d4f8ac39835fdfbf5160"
+  },
+  "examples/03_control_flow.c": {
+    "mtime": 1786962126.407072,
+    "seen": 1787592533.1075723,
+    "ast_hash": "0f42c26678bac159549f3dfa15ef9a62",
+    "semantic_hash": "0f42c26678bac159549f3dfa15ef9a62"
+  },
+  "examples/04_functions.c": {
+    "mtime": 1786962161.132595,
+    "seen": 1787592533.1075737,
+    "ast_hash": "8a3c0714789c81bd9e7df4221c58f631",
+    "semantic_hash": "8a3c0714789c81bd9e7df4221c58f631"
+  },
+  "examples/05_structs.c": {
+    "mtime": 1786962206.7413383,
+    "seen": 1787592533.1075757,
+    "ast_hash": "81427a30d215a4d02332c95c44f16805",
+    "semantic_hash": "81427a30d215a4d02332c95c44f16805"
+  },
+  "examples/06_multi_file/main.c": {
+    "mtime": 1786962350.5890455,
+    "seen": 1787592533.107577,
+    "ast_hash": "dad186a57f9327a5324223cf6dc33992",
+    "semantic_hash": "dad186a57f9327a5324223cf6dc33992"
+  },
+  "examples/06_multi_file/math.c": {
+    "mtime": 1786962279.1841586,
+    "seen": 1787592533.1075785,
+    "ast_hash": "2a850d95178b244d4eda1273f6923f9e",
+    "semantic_hash": "2a850d95178b244d4eda1273f6923f9e"
+  },
+  "examples/06_multi_file/math.h": {
+    "mtime": 1786962239.8059752,
+    "seen": 1787592533.1075802,
+    "ast_hash": "ee0ce56c6392488f1d3459432aeb0558",
+    "semantic_hash": "ee0ce56c6392488f1d3459432aeb0558"
+  },
+  "examples/07_diagnostics/bad_syntax.c": {
+    "mtime": 1786962383.9476545,
+    "seen": 1787592533.1075816,
+    "ast_hash": "f6edf9dc5a96c6e1d37a2361fbcdc0cb",
+    "semantic_hash": "f6edf9dc5a96c6e1d37a2361fbcdc0cb"
+  },
+  "examples/07_diagnostics/undefined_func.c": {
+    "mtime": 1786962417.6932344,
+    "seen": 1787592533.1075835,
+    "ast_hash": "49b9f203f14c58a2d66cc159fd8c6ecf",
+    "semantic_hash": "49b9f203f14c58a2d66cc159fd8c6ecf"
+  },
+  "examples/08_ir_asm/simple.c": {
+    "mtime": 1786962440.9535656,
+    "seen": 1787592533.1075902,
+    "ast_hash": "591649e63b9bf8f43b7366f3702beae1",
+    "semantic_hash": "591649e63b9bf8f43b7366f3702beae1"
+  },
+  "tests/fixtures/arithmetic.c": {
+    "mtime": 1786957282.1653986,
+    "seen": 1787592533.1075919,
+    "ast_hash": "62707dc31af7f60456bed56bf81b54c8",
+    "semantic_hash": "62707dc31af7f60456bed56bf81b54c8"
+  },
+  "tests/fixtures/conditionals.c": {
+    "mtime": 1786957432.241255,
+    "seen": 1787592533.1075935,
+    "ast_hash": "eaded6a92432eb6c6e4da65fb85a900b",
+    "semantic_hash": "eaded6a92432eb6c6e4da65fb85a900b"
+  },
+  "tests/fixtures/functions.c": {
+    "mtime": 1786957367.0825224,
+    "seen": 1787592533.107595,
+    "ast_hash": "fc57b77216d7e25e4632450fd912b1da",
+    "semantic_hash": "fc57b77216d7e25e4632450fd912b1da"
+  },
+  "tests/fixtures/hello.c": {
+    "mtime": 1786905850.6154053,
+    "seen": 1787592533.1075966,
+    "ast_hash": "656e487b83a708b3bfc3f3e6677a6524",
+    "semantic_hash": "656e487b83a708b3bfc3f3e6677a6524"
+  },
+  "tests/fixtures/hello.cpp": {
+    "mtime": 1786953907.6443596,
+    "seen": 1787592533.1075983,
+    "ast_hash": "f714e4391611beed247835cf75361ff0",
+    "semantic_hash": "f714e4391611beed247835cf75361ff0"
+  },
+  "tests/fixtures/invalid_syntax.c": {
+    "mtime": 1786958014.3494232,
+    "seen": 1787592533.1076,
+    "ast_hash": "b38befe0f8e6ac91cbfc82d9b4110fd4",
+    "semantic_hash": "b38befe0f8e6ac91cbfc82d9b4110fd4"
+  },
+  "tests/fixtures/loops.c": {
+    "mtime": 1786957496.490068,
+    "seen": 1787592533.1076014,
+    "ast_hash": "7ad95d13022859e12e72f88b35df9371",
+    "semantic_hash": "7ad95d13022859e12e72f88b35df9371"
+  },
+  "tests/fixtures/math_utils.c": {
+    "mtime": 1786957574.7047613,
+    "seen": 1787592533.1076047,
+    "ast_hash": "b35ec827cdd1c86ea9488814770b2127",
+    "semantic_hash": "b35ec827cdd1c86ea9488814770b2127"
+  },
+  "tests/fixtures/math_utils.h": {
+    "mtime": 1786957606.472202,
+    "seen": 1787592533.1076064,
+    "ast_hash": "6834848ed8d9a7c03dcca15eec482086",
+    "semantic_hash": "6834848ed8d9a7c03dcca15eec482086"
+  },
+  "tests/fixtures/multi_file_main.c": {
+    "mtime": 1786957639.479544,
+    "seen": 1787592533.1076078,
+    "ast_hash": "3f32b0423a5fa3f2778c80e308fbf6b0",
+    "semantic_hash": "3f32b0423a5fa3f2778c80e308fbf6b0"
+  },
+  "tests/fixtures/pointers.c": {
+    "mtime": 1786958445.4178772,
+    "seen": 1787592533.1076095,
+    "ast_hash": "2bc48acb851c390bab89855c05d12b48",
+    "semantic_hash": "2bc48acb851c390bab89855c05d12b48"
+  },
+  "tests/fixtures/structs.c": {
+    "mtime": 1786958393.0240731,
+    "seen": 1787592533.1076112,
+    "ast_hash": "66b4e38e97f23c9756fce76d3c924886",
+    "semantic_hash": "66b4e38e97f23c9756fce76d3c924886"
+  },
+  "tests/fixtures/undefined_func.c": {
+    "mtime": 1786958089.657383,
+    "seen": 1787592533.1076126,
+    "ast_hash": "49b9f203f14c58a2d66cc159fd8c6ecf",
+    "semantic_hash": "49b9f203f14c58a2d66cc159fd8c6ecf"
+  }
+}

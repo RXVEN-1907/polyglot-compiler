@@ -1,0 +1,23 @@
+{
+  "ignorePatterns": [
+    {
+      "pattern": "https://github.com/RXVEN-1907/polyglot-compiler/(issues|pull|discussions|security)/.*",
+      "reason": "Relative links in repo"
+    },
+    {
+      "pattern": "mailto:.*",
+      "reason": "Email links"
+    }
+  ],
+  "replacementPatterns": [
+    {
+      "pattern": "^/(.*)$",
+      "replacement": "https://github.com/RXVEN-1907/polyglot-compiler/$1"
+    }
+  ],
+  "aliveStatusCodes": [200, 301, 302],
+  "retryOn429": true,
+  "retryCount": 3,
+  "fallbackRetryDelay": 1000,
+  "timeout": 10000
+}

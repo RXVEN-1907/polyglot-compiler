@@ -1,0 +1,22 @@
+[package]
+name = "polyglot-driver"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Polyglot compiler driver - CLI and build orchestration"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+target-lexicon = { workspace = true }
+polyglot-protocol = { path = "../polyglot-protocol" }
+tempfile = { workspace = true }
+which = "6.0"
+dirs = "5.0"

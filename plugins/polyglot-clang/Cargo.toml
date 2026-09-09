@@ -1,0 +1,20 @@
+[package]
+name = "polyglot-clang"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Polyglot Clang plugin - C/C++ frontend via Clang"
+
+[[bin]]
+name = "polyglot-clang"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+polyglot-protocol = { path = "../../crates/polyglot-protocol" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tempfile = { workspace = true }
+which = "6.0"
+async-trait = "0.1"

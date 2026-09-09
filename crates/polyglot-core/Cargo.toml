@@ -1,0 +1,9 @@
+[package]
+name = "polyglot-core"
+description = "Core types shared across the Polyglot compiler: source spans, diagnostics, and the C type model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
