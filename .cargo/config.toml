@@ -1,8 +1,15 @@
 # Workspace-local build configuration.
 #
-# polyglot-mlir / polyglot-codegen link against the MLIR C API from a local
-# LLVM 17.0.6 install. These env vars point mlir-sys (v220) at that install
-# and give bindgen access to clang's builtin headers.
-[env]
-MLIR_SYS_220_PREFIX = "/home/jupyter-24b11cs489@adityau-1219b/llvm-install/clang+llvm-17.0.6-x86_64-linux-gnu-ubuntu-22.04"
-BINDGEN_EXTRA_CLANG_ARGS = "-I/home/jupyter-24b11cs489@adityau-1219b/llvm-install/clang+llvm-17.0.6-x86_64-linux-gnu-ubuntu-22.04/lib/clang/17/include"
+# polyglot-mlir / polyglot-codegen link against the MLIR C API from an LLVM 17
+# install: mlir-sys (v220) locates it through MLIR_SYS_220_PREFIX and bindgen
+# needs clang's builtin headers. There is deliberately no [env] block here —
+# a checked-in prefix only works on one machine. CI sets its own values in
+# .github/workflows/ci.yml; for local development export them in your shell
+# (see the "LLVM / MLIR toolchain" section of ~/.bashrc on the dev box), e.g.:
+#
+#   export MLIR_SYS_220_PREFIX=/path/to/clang+llvm-17.0.6-x86_64-linux-gnu-ubuntu-22.04
+#   export BINDGEN_EXTRA_CLANG_ARGS="-I$MLIR_SYS_220_PREFIX/lib/clang/17/include"
+#
+# Plain [env] entries never override variables already present in the
+# environment, so exporting the same names in the shell takes precedence
+# either way.

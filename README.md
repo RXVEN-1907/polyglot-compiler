@@ -15,7 +15,7 @@
 [![MLIR](https://img.shields.io/badge/MLIR-Enabled-purple.svg?style=flat-square)](https://mlir.llvm.org)
 [![Cranelift](https://img.shields.io/badge/Cranelift-Codegen-red.svg?style=flat-square)](https://github.com/bytecodealliance/wasmtime/tree/main/cranelift)
 
-[![GitHub Stars](https://img.shields.io/github/stars/RXVEN-1907/polyglot-compiler?style=social)](https://github.com/RXVEN-1907/polyglot-compiler/stargazers)
+[![GitHub Stars](https://img.shields.io/github/stars/RXVEN-1907/polyglot-compiler?style=social)](https://github.com/RXVEN-1907/polyglot-compiler)
 [![GitHub Forks](https://img.shields.io/github/forks/RXVEN-1907/polyglot-compiler?style=social)](https://github.com/RXVEN-1907/polyglot-compiler/network/members)
 [![GitHub Issues](https://img.shields.io/github/issues/RXVEN-1907/polyglot-compiler?style=flat-square)](https://github.com/RXVEN-1907/polyglot-compiler/issues)
 [![GitHub Discussions](https://img.shields.io/github/discussions/RXVEN-1907/polyglot-compiler?style=flat-square)](https://github.com/RXVEN-1907/polyglot-compiler/discussions)

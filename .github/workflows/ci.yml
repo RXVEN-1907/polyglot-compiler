@@ -82,13 +82,16 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      # libpolly-17-dev provides libPolly.a / libPollyISL.a: mlir-sys's build
+      # script links every static lib `llvm-config --libnames` reports, and
+      # Ubuntu ships the Polly archives separately from llvm-17-dev.
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libzstd-dev libtinfo-dev libxml2-dev \
             clang-17 llvm-17 lld-17 \
-            llvm-17-dev libmlir-17-dev libclang-17-dev
+            llvm-17-dev libmlir-17-dev libclang-17-dev libpolly-17-dev
 
       - name: Prepend LLVM 17 bin dir to PATH
         run: echo "/usr/lib/llvm-17/bin" >> "$GITHUB_PATH"
@@ -163,13 +166,14 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # libpolly-17-dev: see the note in the rust-tests job.
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libzstd-dev libtinfo-dev libxml2-dev \
             clang-17 llvm-17 lld-17 \
-            llvm-17-dev libmlir-17-dev libclang-17-dev
+            llvm-17-dev libmlir-17-dev libclang-17-dev libpolly-17-dev
 
       - name: Cache cargo dependencies
         uses: actions/cache@v4
@@ -243,14 +247,21 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # Full history: git-revision-date-localized needs commit dates
+          # (enable_creation_date) and warns — fatal under --strict — when
+          # history is missing.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
+      # The plugin list mirrors mkdocs.yml's `plugins:`; anything declared
+      # there but not installed aborts the build.
       - name: Install mkdocs
-        run: python3 -m pip install mkdocs mkdocs-material
+        run: python3 -m pip install mkdocs mkdocs-material mkdocs-git-revision-date-localized-plugin mkdocs-minify-plugin
 
       - name: Build docs (strict)
         run: mkdocs build --strict --site-dir /tmp/site
@@ -311,7 +322,7 @@ jobs:
           sudo apt-get install -y \
             libzstd-dev libtinfo-dev libxml2-dev \
             clang-17 llvm-17 lld-17 \
-            llvm-17-dev libmlir-17-dev libclang-17-dev
+            llvm-17-dev libmlir-17-dev libclang-17-dev libpolly-17-dev
 
       - name: Build release binaries
         run: |
