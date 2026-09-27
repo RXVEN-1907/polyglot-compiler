@@ -81,3 +81,5 @@ ENV/
 
 # Polyglot scaffolding
 demo-project/
+# graphify generated knowledge graph (local artifact)
+graphify-out/
