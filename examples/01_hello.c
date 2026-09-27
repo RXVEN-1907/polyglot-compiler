@@ -5,6 +5,6 @@
 #include <stdio.h>
 
 int main() {
-    printf("Hello, Polyglot!\n");
-    return 0;
+  printf("Hello, Polyglot!\n");
+  return 0;
 }

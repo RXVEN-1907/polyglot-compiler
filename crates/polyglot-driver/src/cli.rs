@@ -13,8 +13,18 @@ pub struct Cli {
     pub target: Option<String>,
 
     /// Optimization level
-    #[arg(long, short, global = true, value_enum, default_value = "default")]
+    #[arg(
+        long,
+        short = 'O',
+        global = true,
+        value_enum,
+        default_value = "default"
+    )]
     pub opt_level: OptLevelArg,
+
+    /// Add a directory to the include search path
+    #[arg(short = 'I', long = "include", global = true, value_name = "DIR")]
+    pub include_dirs: Vec<PathBuf>,
 
     /// Output file
     #[arg(long, short, global = true, value_name = "FILE")]
@@ -29,14 +39,26 @@ pub struct Cli {
     pub verbose: bool,
 
     /// Plugin directory
-    #[arg(long, global = true, value_name = "DIR", default_value = "~/.polyglot/plugins")]
+    #[arg(
+        long,
+        global = true,
+        value_name = "DIR",
+        default_value = "~/.polyglot/plugins"
+    )]
     pub plugin_dir: PathBuf,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 pub enum Commands {
-    /// Build a source file or project
+    /// Compile a C source file (to a textual IR artifact, or fully
+    /// native with --backend native)
     Build(BuildArgs),
+
+    /// Parse and type-check a C source file, printing diagnostics
+    Check(CheckArgs),
+
+    /// Compile a C source file and print textual IR (Polyglot or LLVM)
+    EmitIr(EmitIrArgs),
 
     /// Run a source file directly
     Run(RunArgs),
@@ -51,18 +73,22 @@ pub enum Commands {
     Version,
 }
 
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 pub struct BuildArgs {
     /// Source file(s) or project directory
     #[arg(value_name = "PATH")]
     pub path: Option<PathBuf>,
+
+    /// Code generation backend
+    #[arg(long, value_enum, default_value = "ir", value_name = "BACKEND")]
+    pub backend: BackendArg,
 
     /// Compiler arguments to pass to frontend
     #[arg(last = true, value_name = "ARGS")]
     pub args: Vec<String>,
 }
 
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 pub struct RunArgs {
     /// Source file to run
     #[arg(value_name = "FILE")]
@@ -73,13 +99,31 @@ pub struct RunArgs {
     pub args: Vec<String>,
 }
 
-#[derive(Parser)]
+#[derive(Parser, Clone)]
+pub struct CheckArgs {
+    /// Source file to check
+    #[arg(value_name = "FILE")]
+    pub file: PathBuf,
+}
+
+#[derive(Parser, Clone)]
+pub struct EmitIrArgs {
+    /// Source file to compile
+    #[arg(value_name = "FILE")]
+    pub file: PathBuf,
+
+    /// IR dialect to emit
+    #[arg(long, value_enum, default_value = "pgir", value_name = "FORMAT")]
+    pub format: IrFormatArg,
+}
+
+#[derive(Parser, Clone)]
 pub struct PluginArgs {
     #[command(subcommand)]
     pub command: PluginCommand,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Clone)]
 pub enum PluginCommand {
     /// Add a plugin
     Add {
@@ -99,7 +143,7 @@ pub enum PluginCommand {
     Update,
 }
 
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 pub struct InitArgs {
     /// Project name
     #[arg(value_name = "NAME")]
@@ -108,6 +152,31 @@ pub struct InitArgs {
     /// Language/plugin to use
     #[arg(long, value_name = "LANG")]
     pub language: Option<String>,
+}
+
+/// Code generation backend for `polyglot build`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum BackendArg {
+    /// Textual Polyglot IR artifact (default; parse -> check -> lower
+    /// -> optimize -> print).
+    #[value(name = "ir")]
+    Ir,
+    /// Native executable: the same frontend pipeline, then LLVM object
+    /// emission via `llc` and linking via the system `cc`. Single
+    /// source file only — no multi-TU linking yet.
+    #[value(name = "native")]
+    Native,
+}
+
+/// IR dialect for `polyglot emit-ir`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum IrFormatArg {
+    /// Polyglot IR (default).
+    #[value(name = "pgir")]
+    PgIr,
+    /// LLVM 17 textual IR.
+    #[value(name = "llvm")]
+    Llvm,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]

@@ -1,272 +1,2023 @@
 #!/usr/bin/env python3
 """
-Polyglot - Universal Compiler Driver
-A simple driver that uses clang directly for the MVP.
+Polyglot - Universal Compiler Driver (v0.2.0)
+
+A single-file driver that discovers and drives clang / GCC toolchains:
+build, run, check, IR/ASM emission, formatting, linting, JIT, static
+analysis, incremental caching and more.  Backend-aware: the same user
+interface works over clang or GCC, translating flags as needed.
+
+Requires only the Python 3 standard library plus the 'toml' package.
 """
 
 import argparse
+import json
 import os
+import plistlib
+import queue
+import re
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
-import shutil
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+try:
+    import toml
+except ImportError:  # pragma: no cover - toml is only needed for project files
+    toml = None
 
-class PolyglotDriver:
-    def __init__(self):
-        self.clang_path = shutil.which("clang")
-        self.clangxx_path = shutil.which("clang++")
-        if not self.clang_path:
-            print("Error: clang not found in PATH", file=sys.stderr)
-            sys.exit(1)
+VERSION = "0.2.0"
 
-    def build(self, args):
-        """Build source file(s) or project."""
-        paths = [Path(p) for p in args.paths] if args.paths else [Path(".")]
+OPT_MAP = {
+    "none": "-O0",
+    "less": "-O1",
+    "default": "-O2",
+    "aggressive": "-O3",
+    "size": "-Os",
+    "size-aggressive": "-Oz",
+}
 
-        # Determine output path
-        output_path = getattr(args, 'output', None)
-        if output_path:
-            output = Path(output_path)
-        elif len(paths) == 1 and paths[0].is_file():
-            output = paths[0].with_suffix("")
-        else:
-            output = Path("a.out")
+RUST_OPT_MAP = {
+    "none": "-Copt-level=0",
+    "less": "-Copt-level=1",
+    "default": "-Copt-level=2",
+    "aggressive": "-Copt-level=3",
+    "size": "-Copt-level=z",
+    "size-aggressive": "-Copt-level=z",
+}
 
-        # Determine source files
-        if len(paths) == 1 and paths[0].is_dir() and paths[0].joinpath("polyglot.toml").exists():
-            # Project build
-            project_dir = paths[0]
-            source_files, output = self._find_project_source_and_output(project_dir, output)
-            if not source_files:
-                print(f"Error: No source file found in project at {project_dir}", file=sys.stderr)
-                sys.exit(1)
-            # Convert single source to list
-            source_files = [source_files] if isinstance(source_files, Path) else source_files
-        else:
-            # Multiple source files
-            source_files = paths
-            for f in source_files:
-                if not f.exists():
-                    print(f"Error: Source file not found: {f}", file=sys.stderr)
-                    sys.exit(1)
-                if f.is_dir():
-                    print(f"Error: Expected source file, got directory: {f}", file=sys.stderr)
-                    sys.exit(1)
+C_STDS = ["c89", "c99", "c11", "c17", "c2x", "gnu89", "gnu99", "gnu11", "gnu17"]
+CXX_STDS = ["c++98", "c++11", "c++14", "c++17", "c++20", "c++23", "gnu++98",
+            "gnu++11", "gnu++14", "gnu++17", "gnu++20"]
+CXX_SUFFIXES = {".cpp", ".cc", ".cxx", ".c++", ".C", ".cp", ".m", ".mm"}
+SANITIZERS = ["address", "undefined", "thread", "memory", "leak"]
 
-        # Build using clang
-        self._build_with_clang(source_files, output, args.target, args.opt_level)
-        print(f"Built {', '.join(str(f) for f in source_files)} -> {output}")
+WARN_MAP = {
+    "none": [],
+    "default": [],
+    "all": ["-Wall"],
+    "extra": ["-Wall", "-Wextra"],
+    "pedantic": ["-Wall", "-Wextra", "-Wpedantic"],
+}
 
-    def _find_project_source_and_output(self, project_dir, default_output):
-        """Find the main source file and output from polyglot.toml."""
-        config_file = project_dir / "polyglot.toml"
-        if not config_file.exists():
-            return None, default_output
+# Versioned clang names are generated newest-first so freshly released
+# toolchains (clang-20/21, ...) are discovered without code changes.
+_CLANG_V = range(21, 14, -1)          # clang-21 ... clang-15
+C_COMPILER_NAMES = ["clang"] + ["clang-%d" % v for v in _CLANG_V] + ["gcc", "cc"]
+CXX_COMPILER_NAMES = ["clang++"] + ["clang++-%d" % v for v in _CLANG_V] \
+    + ["g++", "c++"]
+CLANG_ONLY_NAMES = ["clang"] + ["clang-%d" % v for v in _CLANG_V]
+GCC_ONLY_NAMES = ["gcc", "cc"]
+CLANGXX_ONLY_NAMES = ["clang++"] + ["clang++-%d" % v for v in _CLANG_V]
+GCCXX_ONLY_NAMES = ["g++", "c++"]
 
-        try:
-            import toml
-            with open(config_file) as f:
-                config = toml.load(f)
+# Directories scanned (in addition to PATH) when a compiler or auxiliary
+# tool cannot be found on PATH.
+SCAN_GLOBS = [
+    "~/llvm-install/*/bin",
+    "/usr/lib/llvm-*/bin",
+    "/usr/local/bin",
+    "/opt/homebrew/opt/llvm/bin",
+    "/usr/local/opt/llvm/bin",
+    "/opt/*/bin",
+]
 
-            bins = config.get("bin", [])
-            if bins and "source" in bins[0]:
-                source_file = project_dir / bins[0]["source"]
-                # Use binary name from config if available
-                output_name = bins[0].get("name")
-                if output_name:
-                    output_file = project_dir / output_name
-                else:
-                    output_file = default_output
-                return source_file, output_file
-        except Exception as e:
-            print(f"DEBUG: Config parse error: {e}", file=sys.stderr)
+# name -> human description, used by doctor / missing-tool messages.
+AUX_TOOLS = {
+    "clang-format": "source code formatter",
+    "clang-tidy": "static linter",
+    "clang-repl": "interactive C++ REPL",
+    "lli": "LLVM bitcode JIT interpreter",
+    "opt": "LLVM optimizer",
+    "llc": "LLVM static compiler",
+    "llvm-mca": "LLVM machine code analyzer",
+    "llvm-nm": "symbol table tool",
+    "llvm-size": "binary size tool",
+    "llvm-objdump": "object dumper",
+    "llvm-ar": "archiver (LLVM)",
+    "llvm-cov": "coverage tool",
+    "llvm-profdata": "profile data tool",
+    "rustc": "Rust compiler",
+    "scan-build": "clang static analysis driver",
+    "wasm-ld": "WebAssembly linker",
+}
 
-        # Fallback
-        src_dir = project_dir / "src"
-        for ext in [".c", ".cpp", ".cc", ".cxx"]:
-            for f in src_dir.glob(f"*{ext}"):
-                return f, default_output
-        return None, default_output
+KNOWN_TARGETS = [
+    ("x86_64-unknown-linux-gnu", "x86-64 Linux (native on this class of host)"),
+    ("aarch64-unknown-linux-gnu", "AArch64 Linux"),
+    ("arm-unknown-linux-gnueabihf", "ARM 32-bit Linux (hard-float)"),
+    ("riscv64-unknown-linux-gnu", "RISC-V 64-bit Linux"),
+    ("wasm32-wasip1", "WebAssembly 32-bit WASI preview 1"),
+]
 
-    def _build_with_clang(self, source_files, output_file, target, opt_level):
-        """Build using clang directly."""
-        # Determine compiler based on first C++ file, or use clang
-        has_cpp = any(f.suffix in [".cpp", ".cc", ".cxx", ".c++"] for f in source_files)
-        compiler = self.clangxx_path if has_cpp else self.clang_path
-        cmd = [compiler] + [str(f) for f in source_files] + ["-o", str(output_file)]
+EXIT_OK = 0
+EXIT_FAILURE = 1
+EXIT_USAGE = 2
+EXIT_MISSING_TOOL = 3
 
-        if target:
-            cmd.append(f"--target={target}")
 
-        # Optimization level
-        opt_map = {
-            "none": "-O0",
-            "less": "-O1",
-            "default": "-O2",
-            "aggressive": "-O3",
-            "size": "-Os",
-            "size-aggressive": "-Oz",
-        }
-        cmd.append(opt_map.get(opt_level, "-O2"))
+# --------------------------------------------------------------------------
+# Small helpers: colored output, errors, shell quoting
+# --------------------------------------------------------------------------
 
-        print(f"Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd)
-        if result.returncode != 0:
-            print(f"Compilation failed with exit code {result.returncode}", file=sys.stderr)
-            sys.exit(result.returncode)
+def _color_enabled():
+    return sys.stdout.isatty() and not os.environ.get("NO_COLOR")
 
-    def run(self, args):
-        """Build and run a source file."""
-        source_file = Path(args.file)
 
-        # Build to temporary executable
-        with tempfile.TemporaryDirectory() as tmpdir:
-            exe_path = Path(tmpdir) / "polyglot_run"
-            self._build_with_clang([source_file], exe_path, args.target, args.opt_level)
+def _paint(text, code, stream=sys.stdout):
+    if getattr(stream, "isatty", lambda: False)() and not os.environ.get("NO_COLOR"):
+        return "\033[%dm%s\033[0m" % (int(code), text)
+    return str(text)
 
-            # Run the executable
-            cmd = [str(exe_path)] + args.args
-            result = subprocess.run(cmd)
-            sys.exit(result.returncode)
 
-    def check(self, args):
-        """Check syntax without building (emit nothing)."""
-        for path_str in args.paths:
-            source_file = Path(path_str)
-            if not source_file.exists():
-                print(f"Error: Source file not found: {source_file}", file=sys.stderr)
-                sys.exit(1)
+def green(text, stream=sys.stdout):
+    return _paint(text, "32", stream)
 
-            # Use clang with -fsyntax-only
-            has_cpp = source_file.suffix in [".cpp", ".cc", ".cxx", ".c++"]
-            compiler = self.clangxx_path if has_cpp else self.clang_path
 
-            cmd = [compiler, "-fsyntax-only", str(source_file)]
-            if args.target:
-                cmd.append(f"--target={args.target}")
+def red(text, stream=sys.stdout):
+    return _paint(text, "31", stream)
 
-            print(f"Checking {source_file}...")
-            result = subprocess.run(cmd)
-            if result.returncode != 0:
-                print(f"Syntax check failed for {source_file}", file=sys.stderr)
-                sys.exit(result.returncode)
 
-        print("All files passed syntax check")
+def yellow(text, stream=sys.stdout):
+    return _paint(text, "33", stream)
 
-    def emit_ir(self, args):
-        """Emit LLVM IR."""
-        source_files = [Path(p) for p in args.paths]
-        for f in source_files:
-            if not f.exists():
-                print(f"Error: Source file not found: {f}", file=sys.stderr)
-                sys.exit(1)
 
-        has_cpp = any(f.suffix in [".cpp", ".cc", ".cxx", ".c++"] for f in source_files)
-        compiler = self.clangxx_path if has_cpp else self.clang_path
+def err_print(msg):
+    print(red(msg, sys.stderr), file=sys.stderr)
 
-        cmd = [compiler] + [str(f) for f in source_files] + ["-S", "-emit-llvm"]
 
-        if args.target:
-            cmd.append(f"--target={args.target}")
+class PolyglotError(Exception):
+    """A friendly, user-facing error.  .exit_code decides the process exit."""
 
-        if args.output:
-            cmd.extend(["-o", args.output])
-        else:
-            # Default to stdout
-            pass
+    def __init__(self, message, exit_code=EXIT_FAILURE):
+        super().__init__(message)
+        self.exit_code = exit_code
 
-        print(f"Emitting IR: {' '.join(cmd)}")
-        result = subprocess.run(cmd)
-        if result.returncode != 0:
-            print(f"IR emission failed", file=sys.stderr)
-            sys.exit(result.returncode)
 
-    def emit_asm(self, args):
-        """Emit assembly."""
-        source_files = [Path(p) for p in args.paths]
-        for f in source_files:
-            if not f.exists():
-                print(f"Error: Source file not found: {f}", file=sys.stderr)
-                sys.exit(1)
+class MissingToolError(PolyglotError):
+    """A backing tool could not be located."""
 
-        has_cpp = any(f.suffix in [".cpp", ".cc", ".cxx", ".c++"] for f in source_files)
-        compiler = self.clangxx_path if has_cpp else self.clang_path
+    def __init__(self, tool, searched=None, purpose=None):
+        # main()'s handler already prefixes "error: " when printing.
+        msg = "required tool '%s' not found" % tool
+        if purpose:
+            msg += " (needed for %s)" % purpose
+        if searched:
+            msg += "\nSearched: %s" % searched
+        msg += "\nInstall it and re-run, or adjust PATH/POLYGLOT_CC."
+        super().__init__(msg, EXIT_MISSING_TOOL)
+        self.tool = tool
 
-        cmd = [compiler] + [str(f) for f in source_files] + ["-S"]
 
-        if args.target:
-            cmd.append(f"--target={args.target}")
+def quote(cmd):
+    """Pretty-print a command list for logs (never used for execution)."""
+    return " ".join(shlex.quote(str(c)) for c in cmd)
 
-        if args.output:
-            cmd.extend(["-o", args.output])
 
-        print(f"Emitting assembly: {' '.join(cmd)}")
-        result = subprocess.run(cmd)
-        if result.returncode != 0:
-            print(f"Assembly emission failed", file=sys.stderr)
-            sys.exit(result.returncode)
+def run_cmd(cmd, **kwargs):
+    """subprocess.run with list args only (never shell=True)."""
+    return subprocess.run([str(c) for c in cmd], **kwargs)
 
-    def clean(self, args):
-        """Clean build artifacts."""
-        project_dir = Path(args.path)
 
-        # Remove common build artifacts
-        patterns = ["*.o", "*.obj", "*.exe", "a.out", "*.ll", "*.s", "*.bc"]
-        removed = 0
+def exit_status(rc):
+    """Map a signal death (-N) to the conventional 128+N exit status."""
+    return 128 - rc if rc < 0 else rc
 
-        for pattern in patterns:
-            for f in project_dir.glob(pattern):
-                if f.is_file():
-                    f.unlink()
-                    print(f"Removed {f}")
-                    removed += 1
 
-        # Also check for executable with project name (from polyglot.toml)
-        config_file = project_dir / "polyglot.toml"
-        if config_file.exists():
+def host_machine():
+    m = os.uname().machine.lower()
+    return {"amd64": "x86_64", "arm64": "aarch64", "armv7l": "arm",
+            "armv8l": "arm", "i686": "x86", "i386": "x86"}.get(m, m)
+
+
+def host_os():
+    """Vendor/OS part of a host triple, e.g. for `polyglot init`."""
+    if sys.platform == "darwin":
+        return "apple-darwin"
+    if sys.platform.startswith("win"):
+        return "pc-windows-msvc"
+    return "unknown-linux-gnu"
+
+
+def target_matches_host(target):
+    """True when a --target triple refers to this host (for GCC silently-ok)."""
+    if not target:
+        return True
+    arch = target.split("-")[0].lower()
+    arch = {"amd64": "x86_64", "arm64": "aarch64", "armv7": "arm",
+            "armv7l": "arm", "armhf": "arm", "i686": "x86"}.get(arch, arch)
+    if arch != host_machine():
+        return False
+    if "linux" in target and os.uname().sysname.lower() != "linux":
+        return False
+    if os.uname().sysname.lower() == "linux":
+        # same-arch triples for a *different* OS are cross builds too; the
+        # host gcc cannot serve them silently.
+        for tok in ("darwin", "macos", "mingw", "windows", "freebsd",
+                    "netbsd", "openbsd", "solaris", "aix", "haiku"):
+            if tok in target:
+                return False
+    return True
+
+
+# --------------------------------------------------------------------------
+# Toolchain discovery
+# --------------------------------------------------------------------------
+
+class Toolchain:
+    """Locates the C/C++ compiler (clang or GCC) and auxiliary LLVM tools.
+
+    Precedence for the C compiler:
+      1. POLYGLOT_CC / POLYGLOT_CXX environment variables (absolute).
+      2. --compiler clang|gcc forced selection on PATH / scan dirs.
+      3. Auto discovery: PATH candidates in preference order, then
+         well-known LLVM install directories.
+    """
+
+    def __init__(self, prefer="auto", defer=False, require=True):
+        self.prefer = prefer
+        self.cc_path = None
+        self.cxx_path = None
+        self.kind = None            # "clang" | "gcc"
+        self.version = "unknown"
+        self.found_off_path = False
+        self._aux_cache = {}
+        self._require = require
+        if not defer:
+            self._discover()
+
+    # -- discovery ---------------------------------------------------------
+
+    @staticmethod
+    def _scan_dirs():
+        dirs = []
+        for pattern in SCAN_GLOBS:
             try:
-                import toml
-                with open(config_file) as f:
-                    config = toml.load(f)
-                bins = config.get("bin", [])
-                for bin_cfg in bins:
-                    name = bin_cfg.get("name")
-                    if name:
-                        exe = project_dir / name
-                        if exe.exists():
-                            exe.unlink()
-                            print(f"Removed {exe}")
-                            removed += 1
-            except Exception:
+                expanded = Path(pattern).expanduser()
+                for d in sorted(Path("/").glob(str(expanded).lstrip("/"))):
+                    dirs.append(d)
+            except (OSError, ValueError):
+                continue
+        return dirs
+
+    @staticmethod
+    def _find_on_path(names):
+        """First PATH hit among names, or None."""
+        for name in names:
+            p = shutil.which(name)
+            if p:
+                return Path(p)
+        return None
+
+    @classmethod
+    def _find_by_names(cls, names):
+        """Search PATH first, then well-known scan dirs, in name order."""
+        for name in names:
+            p = shutil.which(name)
+            if p:
+                return Path(p), False
+        for d in cls._scan_dirs():
+            for name in names:
+                cand = d / name
+                try:
+                    if cand.is_file() and os.access(cand, os.X_OK):
+                        return cand, True
+                except OSError:
+                    continue
+        return None, False
+
+    def _detect_kind_and_version(self):
+        try:
+            proc = run_cmd([self.cc_path, "--version"], capture_output=True,
+                           text=True, timeout=30)
+            out = (proc.stdout or "") + (proc.stderr or "")
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise PolyglotError("cannot execute compiler %s: %s"
+                                % (self.cc_path, exc))
+        low = out.lower()
+        first = (out.strip().splitlines() or ["unknown"])[0].strip()
+        self.version = first
+        if "clang" in low:
+            self.kind = "clang"
+        elif "gcc" in low or "free software foundation" in low:
+            self.kind = "gcc"
+        else:
+            raise PolyglotError(
+                "unrecognized compiler backend at %s (use --compiler clang|gcc)"
+                % self.cc_path)
+
+    def _discover(self):
+        env_cc = os.environ.get("POLYGLOT_CC")
+
+        if self.prefer == "clang":
+            names = CLANG_ONLY_NAMES
+        elif self.prefer == "gcc":
+            names = GCC_ONLY_NAMES
+        else:
+            names = C_COMPILER_NAMES
+
+        cc, off_path = self._find_by_names(names)
+        if env_cc:
+            cc, off_path = Path(env_cc), False
+        if cc is None:
+            if self._require:
+                raise MissingToolError(
+                    "a C compiler (%s)" % "/".join(names[:3] + ["..."]),
+                    searched="PATH, " + ", ".join(SCAN_GLOBS),
+                    purpose="all polyglot commands")
+            self.cc_path = None      # discovery state saved for doctor/version
+            self.found_off_path = False
+            return
+        if not off_path and env_cc is None and self.prefer != "auto":
+            # forced selection also accepts scan-dir hits
+            pass
+        self.cc_path = cc
+        self.found_off_path = off_path
+        self._detect_kind_and_version()
+        self._discover_cxx()
+
+    def _discover_cxx(self):
+        """Locate the C++ compiler (same family preferred, other fallback)."""
+        if self.cxx_path is not None:
+            return
+        env_cxx = os.environ.get("POLYGLOT_CXX")
+        if env_cxx:
+            self.cxx_path = Path(env_cxx)
+            return
+        if self.prefer == "clang":
+            cxx_names = CLANGXX_ONLY_NAMES
+        elif self.prefer == "gcc":
+            cxx_names = GCCXX_ONLY_NAMES
+        elif self.kind == "clang":
+            cxx_names = CLANGXX_ONLY_NAMES + GCCXX_ONLY_NAMES
+        else:
+            cxx_names = GCCXX_ONLY_NAMES + CLANGXX_ONLY_NAMES
+        cxx = self._find_on_path(cxx_names)
+        if cxx is None and self.cc_path is not None:
+            # sibling pass: clang++ sitting next to the discovered clang
+            for name in cxx_names:
+                cand = self.cc_path.parent / name
+                try:
+                    if cand.is_file() and os.access(cand, os.X_OK):
+                        cxx = cand
+                        break
+                except OSError:
+                    continue
+        if cxx is None:
+            cxx, _ = self._find_by_names(cxx_names)
+        self.cxx_path = cxx
+
+    def ensure_discovered(self):
+        """Run discovery lazily (build defers it until polyglot.toml is read).
+
+        When a project's [compiler] section already supplied a C compiler,
+        only the still-missing C++ compiler is looked up.
+        """
+        if self.cc_path is None:
+            self._discover()
+        else:
+            self._discover_cxx()
+
+    # -- auxiliary tools ---------------------------------------------------
+
+    def find_tool(self, name):
+        """Locate an auxiliary tool: PATH, then clang's own bin dir, then
+        the well-known LLVM scan dirs.  Returns a Path or None."""
+        if name in self._aux_cache:
+            return self._aux_cache[name]
+        found = None
+        p = shutil.which(name)
+        if p:
+            found = Path(p)
+        else:
+            tried = []
+            if self.cc_path:
+                sibling = self.cc_path.parent / name
+                tried.append(str(sibling))
+                try:
+                    if sibling.is_file() and os.access(sibling, os.X_OK):
+                        found = sibling
+                except OSError:
+                    pass
+            if found is None:
+                for d in self._scan_dirs():
+                    cand = d / name
+                    tried.append(str(cand))
+                    try:
+                        if cand.is_file() and os.access(cand, os.X_OK):
+                            found = cand
+                            break
+                    except OSError:
+                        continue
+        self._aux_cache[name] = found
+        return found
+
+    def tool_or_error(self, name, purpose):
+        p = self.find_tool(name)
+        if p is None:
+            raise MissingToolError(name, searched="PATH and LLVM install dirs",
+                                   purpose=purpose)
+        return p
+
+    def compiler_for(self, source_files):
+        """Pick cc vs cxx by the suffixes present."""
+        if any(Path(f).suffix in CXX_SUFFIXES for f in source_files):
+            if self.cxx_path:
+                return self.cxx_path
+            raise MissingToolError("a C++ compiler (clang++/g++)",
+                                   purpose="C++ sources")
+        return self.cc_path
+
+    def needs_target_ok(self, target):
+        """Validate --target for this backend; raises on unsupported."""
+        if not target or self.kind == "clang":
+            return
+        if not target_matches_host(target):
+            raise PolyglotError(
+                "GCC backend cannot target '%s': GCC needs a matching cross "
+                "toolchain (e.g. aarch64-linux-gnu-gcc).\nHint: use clang for "
+                "cross-compilation (--compiler clang)." % target)
+
+    def apply_project_config(self, config):
+        """Honour polyglot.toml [compiler] cc/cxx keys for project builds.
+
+        POLYGLOT_CC / POLYGLOT_CXX environment variables keep absolute
+        precedence over the config file.
+        """
+        comp = (config or {}).get("compiler") or {}
+        changed = False
+
+        def resolve(value):
+            p = Path(value).expanduser()
+            if not p.is_absolute():
+                p = Path(shutil.which(value) or p)
+            return p if p.exists() else None
+
+        cc = comp.get("cc")
+        if cc and not os.environ.get("POLYGLOT_CC"):
+            p = resolve(cc)
+            if p is not None:
+                self.cc_path = p
+                self.found_off_path = shutil.which("clang") is None \
+                    and self.kind == "clang"
+                changed = True
+            else:
+                raise PolyglotError("polyglot.toml [compiler] cc = '%s' does "
+                                    "not resolve to an executable" % cc)
+        cxx = comp.get("cxx")
+        if cxx and not os.environ.get("POLYGLOT_CXX"):
+            p = resolve(cxx)
+            if p is not None:
+                self.cxx_path = p
+            else:
+                raise PolyglotError("polyglot.toml [compiler] cxx = '%s' does "
+                                    "not resolve to an executable" % cxx)
+        if changed:
+            self._detect_kind_and_version()
+
+    def describe(self):
+        return "%s (%s, %s)" % (self.cc_path, self.kind, self.version)
+
+
+# --------------------------------------------------------------------------
+# Flag construction (backend-aware)
+# --------------------------------------------------------------------------
+
+def validate_std(std, source_files):
+    """Validate --std against the language implied by the source suffix."""
+    if not std:
+        return None
+    is_cxx = any(Path(f).suffix in CXX_SUFFIXES for f in source_files)
+    allowed = CXX_STDS if is_cxx else C_STDS
+    if std not in allowed:
+        lang = "C++" if is_cxx else "C"
+        raise PolyglotError(
+            "invalid --std '%s' for %s sources (choose from: %s)"
+            % (std, lang, ", ".join(allowed)), EXIT_USAGE)
+    return std
+
+
+def default_std(source_files):
+    """Per-suffix default standard when the user did not ask for one."""
+    return "c++17" if any(Path(f).suffix in CXX_SUFFIXES for f in source_files) \
+        else "c17"
+
+
+def common_compile_args(tc, args, source_files, *, for_emit=False):
+    """Build the shared flag list honored by both clang and GCC."""
+    flags = []
+    std = validate_std(getattr(args, "std", None), source_files) \
+        or default_std(source_files)
+    flags.append("-std=" + std)
+
+    warn = getattr(args, "warn", "default") or "default"
+    flags.extend(WARN_MAP.get(warn, WARN_MAP["default"]))
+    if getattr(args, "werror", False):
+        flags.append("-Werror")
+    if getattr(args, "debug", False):
+        flags.append("-g")
+
+    sanitizers = getattr(args, "sanitize", None)
+    if sanitizers:
+        chosen = [s.strip() for s in sanitizers.split(",") if s.strip()]
+        for s in chosen:
+            if s not in SANITIZERS:
+                raise PolyglotError(
+                    "invalid sanitizer '%s' (choose from: %s)"
+                    % (s, ", ".join(SANITIZERS)), EXIT_USAGE)
+            if s == "memory" and tc.kind == "gcc":
+                raise PolyglotError(
+                    "-fsanitize=memory is clang-only; the GCC backend does not "
+                    "support MemorySanitizer (use clang or drop 'memory').",
+                    EXIT_USAGE)
+        if chosen:
+            flags.append("-fsanitize=" + ",".join(chosen))
+
+    for inc in getattr(args, "includes", None) or []:
+        flags.extend(["-I", str(inc)])
+    for define in getattr(args, "defines", None) or []:
+        flags.append("-D" + define)
+
+    opt = OPT_MAP.get(getattr(args, "opt_level", "default"), "-O2")
+    if opt == "-Oz" and tc.kind == "gcc":
+        # -Oz needs gcc >= 12; -Os is valid everywhere and semantically
+        # closest (mirrors the -fsanitize=memory backend guard above).
+        opt = "-Os"
+    flags.append(opt)
+
+    target = getattr(args, "target", None)
+    if target and tc.kind == "clang":
+        flags.append("--target=" + target)
+    else:
+        tc.needs_target_ok(target)
+
+    if for_emit and tc.kind == "clang":
+        flags.append("-fno-discard-value-names")
+
+    # User-supplied raw flags go last: compilers honor the final -O/-f...,
+    # so an explicit --cc-arg=-O0 must win over the driver's default.
+    for raw in getattr(args, "cc_args", None) or []:
+        flags.append(raw)
+    return flags
+
+
+def link_args(args, tc):
+    """Library search paths / libraries for the link step."""
+    flags = []
+    for libdir in getattr(args, "lib_dirs", None) or []:
+        flags.extend(["-L", str(libdir)])
+    for lib in getattr(args, "libs", None) or []:
+        flags.extend(["-l", str(lib)])
+    return flags
+
+
+def log_running(cmd, args):
+    if getattr(args, "quiet", False):
+        return
+    print("Running: %s" % quote(cmd))
+
+
+# --------------------------------------------------------------------------
+# Incremental build cache
+# --------------------------------------------------------------------------
+
+class BuildCache:
+    """Content-addressed object cache stored in <project>/.polyglot-cache/."""
+
+    def __init__(self, project_dir, enabled=True):
+        self.enabled = enabled
+        self.dir = Path(project_dir) / ".polyglot-cache"
+        self.manifest_path = self.dir / "manifest.json"
+        self._manifest = None
+
+    def _load_manifest(self):
+        if self._manifest is None:
+            try:
+                self._manifest = json.loads(self.manifest_path.read_text())
+            except (OSError, ValueError):
+                self._manifest = {}
+        return self._manifest
+
+    @staticmethod
+    def key(tc, flags, source, project_dir):
+        """sha256 of (compiler path+version, flags, preprocessed TU, includes).
+
+        The preprocessed translation unit is hashed (ccache's preprocessor
+        mode) so a change to *any* included header invalidates the entry;
+        old entries simply miss.  When preprocessing fails, the raw source
+        bytes are hashed as a fallback.
+        """
+        import hashlib
+        src = Path(source)
+        content = None
+        try:
+            proc = run_cmd([str(tc.compiler_for([src]))]
+                           + [str(f) for f in flags]
+                           + ["-E", str(Path(source).resolve())],
+                           capture_output=True, text=True, timeout=120)
+            if proc.returncode == 0 and proc.stdout:
+                content = proc.stdout.encode("utf-8", "surrogateescape")
+        except (OSError, subprocess.SubprocessError):
+            content = None
+        if content is None:
+            content = src.read_bytes()
+        h = hashlib.sha256()
+        payload = {
+            "compiler": str(tc.cc_path),
+            "version": tc.version,
+            "flags": flags,
+            "source": str(Path(source).resolve()),
+            "bytes": hashlib.sha256(content).hexdigest(),
+            "project": str(Path(project_dir).resolve()),
+        }
+        h.update(json.dumps(payload, sort_keys=True).encode())
+        return h.hexdigest()
+
+    def object_path(self, key):
+        return self.dir / (key + ".o")
+
+    def get(self, key):
+        if not self.enabled:
+            return None
+        obj = self.object_path(key)
+        if obj.is_file() and key in self._load_manifest():
+            return obj
+        return None
+
+    def store(self, key, source, flags, tmp_obj):
+        """Move a freshly compiled object into the cache (atomic rename)."""
+        if not self.enabled:
+            return
+        try:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            obj = self.object_path(key)
+            os.replace(tmp_obj, obj)   # same dir -> atomic on POSIX
+            manifest = self._load_manifest()
+            manifest[key] = {
+                "source": str(source),
+                "flags": flags,
+                "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+            tmp_m = self.dir / ("manifest.%d.json.tmp" % os.getpid())
+            tmp_m.write_text(json.dumps(manifest, indent=1, sort_keys=True))
+            os.replace(tmp_m, self.manifest_path)
+        except OSError:
+            pass  # cache is best-effort; a failed store must not fail builds
+
+    def clear(self):
+        removed = 0
+        if self.dir.is_dir():
+            for f in self.dir.iterdir():
+                try:
+                    if f.is_file():
+                        f.unlink()
+                        removed += 1
+                except OSError:
+                    pass
+        return removed
+
+
+# --------------------------------------------------------------------------
+# Core compile / link machinery
+# --------------------------------------------------------------------------
+
+def invoke_compiler(cmd, args, what="compilation"):
+    log_running(cmd, args)
+    proc = run_cmd(cmd)
+    if proc.returncode != 0:
+        raise PolyglotError("%s failed with exit code %d"
+                            % (what, proc.returncode), proc.returncode or EXIT_FAILURE)
+    return proc
+
+
+def compile_object(tc, source, out_obj, args, extra_flags):
+    """One translation unit -> one .o file."""
+    compiler = tc.compiler_for([source])
+    cmd = [compiler] + extra_flags + ["-c", str(source), "-o", str(out_obj)]
+    invoke_compiler(cmd, args)
+
+
+def compile_to_exe(tc, sources, output, args, extra_flags, for_project=False):
+    """Build executable (or shared/static lib) from sources.
+
+    Single TU with --no-cache -> one direct compiler invocation.
+    Otherwise every TU is compiled to a (cached) .o file - optionally in
+    parallel via -j - and then linked by one final compiler invocation.
+    """
+    shared = getattr(args, "shared", False)
+    static_lib = getattr(args, "static_lib", False)
+
+    project_dir = Path(getattr(args, "_project_dir", None) or Path.cwd())
+    cache = BuildCache(project_dir, enabled=not getattr(args, "no_cache", False))
+    if cache.enabled:
+        try:
+            cache.dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            cache.enabled = False
+
+    def one(src):
+        flags = list(extra_flags)
+        if shared and "-fPIC" not in flags:
+            # position-independent code is required for every TU of a
+            # .so, not just at the link step
+            flags.append("-fPIC")
+        key = BuildCache.key(tc, flags, src, project_dir)
+        cached = cache.get(key)
+        if cached is not None:
+            if getattr(args, "verbose", False):
+                print(yellow("cache HIT  %s" % src))
+            return cached
+        if getattr(args, "verbose", False):
+            print("cache MISS %s" % src)
+        if cache.enabled:
+            # pid+thread-unique scratch name; store() atomically renames it
+            tmp_obj = cache.object_path("%s.%d.%d.tmp"
+                                        % (key, os.getpid(),
+                                           threading.get_ident()))
+        else:
+            fd, tmp_name = tempfile.mkstemp(suffix=".o")
+            os.close(fd)
+            tmp_obj = Path(tmp_name)
+            no_cache_temps.append(tmp_obj)
+        compile_object(tc, src, tmp_obj, args, flags)
+        if cache.enabled:
+            cache.store(key, src, flags, tmp_obj)
+            return cache.object_path(key)
+        return tmp_obj
+
+    no_cache_temps = []
+    try:
+        if len(sources) == 1 and not cache.enabled and not shared \
+                and not static_lib:
+            compiler = tc.compiler_for(sources)
+            cmd = [compiler] + extra_flags + link_args(args, tc)
+            cmd += [str(s) for s in sources] + ["-o", str(output)]
+            invoke_compiler(cmd, args)
+            return
+
+        workers = max(1, int(getattr(args, "jobs", 1) or 1))
+        if len(sources) > 1 and workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                objects = list(pool.map(one, sources))
+        else:
+            objects = [one(s) for s in sources]
+
+        if static_lib:
+            ar = tc.find_tool("llvm-ar") or shutil.which("ar")
+            if ar is None:
+                raise MissingToolError("ar or llvm-ar",
+                                       purpose="static library builds")
+            out_lib = Path(output)
+            if out_lib.suffix != ".a":
+                # user gave a bare name: normalize to lib<name>.a
+                if not out_lib.name.startswith("lib"):
+                    out_lib = out_lib.parent / ("lib" + out_lib.name)
+                out_lib = out_lib.with_suffix(".a")
+            cmd = [str(ar), "rcs", str(out_lib)] + [str(o) for o in objects]
+            invoke_compiler(cmd, args, what="archiving")
+            print("Built static library %s" % out_lib)
+            return
+
+        compiler = tc.compiler_for(sources)
+        cmd = [compiler] + extra_flags
+        if shared:
+            cmd += ["-shared", "-fPIC"]
+        cmd += [str(o) for o in objects] + link_args(args, tc) \
+            + ["-o", str(output)]
+        invoke_compiler(cmd, args, what="linking")
+    finally:
+        # --no-cache compiles into one-shot mkstemp files: unlink them so
+        # repeated builds (e.g. watch mode) do not leak objects into /tmp.
+        for t in no_cache_temps:
+            try:
+                t.unlink(missing_ok=True)
+            except OSError:
                 pass
 
-        if removed == 0:
-            print("No build artifacts to clean")
+
+# --------------------------------------------------------------------------
+# Plugin architecture: JSON-RPC 2.0 over stdio
+# --------------------------------------------------------------------------
+# A plugin is an executable speaking the protocol implemented by
+# crates/polyglot-protocol: newline-delimited JSON-RPC 2.0 on stdin/stdout
+# (one object per line), human logs on stderr.  Methods: initialize,
+# compile, shutdown (calls) and exit (notification).  See
+# docs/user-guide/commands.md "Plugin architecture".
+
+# Keep in sync with crates/polyglot-protocol/src/types.rs PROTOCOL_VERSION.
+PLUGIN_PROTOCOL_VERSION = "0.1.0"
+
+# driver --opt-level name -> protocol OptLevel (serde lowercase spelling)
+PLUGIN_OPT_LEVEL = {
+    "none": "none", "less": "less", "default": "default",
+    "aggressive": "aggressive", "size": "size",
+    "size-aggressive": "sizeaggressive",
+}
+
+C_CPP_SUFFIXES = {".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".c++"}
+
+
+class PluginError(PolyglotError):
+    """A plugin could not be found, executed, spoken to, or trusted."""
+
+
+class PluginClient:
+    """Minimal JSON-RPC 2.0 client for one plugin process over stdio.
+
+    Requests are written to the plugin's stdin, responses read from its
+    stdout, one JSON object per line; the plugin's stderr is inherited so
+    its diagnostics reach the user directly.  A background thread drains
+    stdout so every request carries a deadline, and stray non-JSON lines
+    on the stream are skipped rather than fatal.
+    """
+
+    def __init__(self, command, timeout=120.0):
+        self.command = str(command)
+        self.timeout = timeout
+        self._next_id = 1
+        self._lines = queue.Queue()
+        try:
+            self.proc = subprocess.Popen(
+                [self.command],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None,
+                text=True, bufsize=1)
+        except OSError as exc:
+            raise PluginError("cannot execute plugin %s: %s" % (command, exc),
+                              EXIT_MISSING_TOOL)
+        self._reader = threading.Thread(target=self._read_loop, daemon=True)
+        self._reader.start()
+
+    def _read_loop(self):
+        """Drain the plugin's stdout into a queue (None = EOF sentinel)."""
+        while True:
+            line = self.proc.stdout.readline()
+            self._lines.put(line.rstrip("\n") if line else None)
+            if not line:
+                return
+
+    def _recv(self, want_id, timeout):
+        deadline = time.time() + timeout
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise PluginError("plugin %s did not respond within %ss"
+                                  % (self.command, int(timeout)))
+            try:
+                line = self._lines.get(timeout=remaining)
+            except queue.Empty:
+                continue
+            if line is None:
+                raise PluginError(
+                    "plugin %s closed its output before answering "
+                    "(is it a polyglot plugin?)" % self.command)
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue          # tolerate stray non-JSON stream noise
+            if not isinstance(msg, dict) or msg.get("id") != want_id:
+                continue          # notification or unrelated response
+            if "error" in msg:
+                rpc_err = msg.get("error") or {}
+                raise PluginError("plugin error %s: %s"
+                                  % (rpc_err.get("code"),
+                                     rpc_err.get("message", "")))
+            return msg.get("result")
+
+    def request(self, method, params=None, timeout=None):
+        rid = self._next_id
+        self._next_id += 1
+        req = {"jsonrpc": "2.0", "id": rid, "method": method}
+        if params is not None:
+            req["params"] = params
+        try:
+            self.proc.stdin.write(json.dumps(req) + "\n")
+            self.proc.stdin.flush()
+        except (BrokenPipeError, OSError, ValueError) as exc:
+            raise PluginError("plugin %s stopped accepting requests: %s"
+                              % (self.command, exc))
+        return self._recv(rid, timeout or self.timeout)
+
+    def initialize(self):
+        """Handshake; returns the plugin's InitializeResult dict."""
+        result = self.request("initialize", {
+            "protocol_version": PLUGIN_PROTOCOL_VERSION,
+            "capabilities": {"mlir_dialects": [], "source_extensions": [],
+                             "languages": [], "incremental": False},
+        }, timeout=30.0)
+        version = (result or {}).get("protocol_version")
+        if not isinstance(result, dict) or version != PLUGIN_PROTOCOL_VERSION:
+            raise PluginError(
+                "plugin %s speaks protocol %r but this driver expects %r\n"
+                "Hint: rebuild the plugin: cargo build --release -p polyglot-clang"
+                % (self.command, version, PLUGIN_PROTOCOL_VERSION),
+                EXIT_MISSING_TOOL)
+        return result
+
+    def compile(self, params):
+        """Compile one translation unit; returns the CompileResult dict."""
+        return self.request("compile", params)
+
+    def close(self):
+        """shutdown call + exit notification, then reap the process."""
+        try:
+            self.request("shutdown", timeout=10.0)
+        except Exception:
+            pass
+        try:
+            self.proc.stdin.write(
+                json.dumps({"jsonrpc": "2.0", "method": "exit"}) + "\n")
+            self.proc.stdin.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+        try:
+            self.proc.stdin.close()
+        except (OSError, AttributeError):
+            pass
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+
+
+def resolve_plugin(name, plugin_dir):
+    """Find a plugin binary; returns a Path or None.
+
+    Resolution order: an explicit path when NAME contains a path separator,
+    then NAME (and polyglot-NAME, the manifest's command naming) under
+    --plugin-dir, then under the workspace target/release directory, then
+    PATH.
+    """
+    if "/" in name or "\\" in name:
+        p = Path(name).expanduser()
+        return p if (p.is_file() and os.access(p, os.X_OK)) else None
+    names = [name]
+    if not name.startswith("polyglot-"):
+        names.append("polyglot-" + name)
+    roots = [Path(plugin_dir).expanduser()]
+    script_dir = Path(__file__).resolve().parent
+    for base in (script_dir / "target" / "release",
+                 Path.cwd() / "target" / "release"):
+        if base not in roots:
+            roots.append(base)
+    for root in roots:
+        for n in names:
+            for cand in (root / n, root / (n + ".exe")):
+                try:
+                    if cand.is_file() and os.access(cand, os.X_OK):
+                        return cand
+                except OSError:
+                    continue
+    for n in names:
+        found = shutil.which(n)
+        if found:
+            return Path(found)
+    return None
+
+
+def plugin_or_missing(name, plugin_dir):
+    """Resolve a mandatory --plugin value or fail with exit 3."""
+    plugin = resolve_plugin(name, plugin_dir)
+    if plugin is None:
+        raise PluginError(
+            "plugin '%s' not found (searched --plugin-dir, target/release, "
+            "PATH)\nHint: build it with: cargo build --release -p "
+            "polyglot-clang\nor pass an explicit path: --plugin "
+            "/path/to/polyglot-clang" % name, EXIT_MISSING_TOOL)
+    return plugin
+
+
+def choose_plugin(args, config, sources):
+    """Which plugin binary should build these sources, or None.
+
+    An explicit --plugin is mandatory: when it is missing or cannot serve
+    the languages involved the build fails (exit 3) or falls back with a
+    warning for non-C/C++ sources.  Plugins listed in polyglot.toml
+    [plugins] are best-effort: a missing one warns and the build falls
+    back to the direct compiler.
+    """
+    plugin_dir = getattr(args, "plugin_dir", None) or "~/.polyglot/plugins"
+    explicit = getattr(args, "plugin", None)
+    if explicit:
+        plugin = plugin_or_missing(explicit, plugin_dir)
+        if any(Path(s).suffix not in C_CPP_SUFFIXES for s in sources):
+            print(yellow("warning: plugin '%s' handles C/C++ sources; using "
+                         "the direct compiler" % explicit))
+            return None
+        return plugin
+    wanted = (config or {}).get("plugins") or {}
+    if not wanted or not all(Path(s).suffix in C_CPP_SUFFIXES for s in sources):
+        return None
+    for name in wanted:
+        plugin = resolve_plugin(name, plugin_dir)
+        if plugin is None:
+            err_print("warning: plugin '%s' (polyglot.toml [plugins]) not "
+                      "found; falling back to the direct compiler "
+                      "(build it with: cargo build --release -p polyglot-%s)"
+                      % (name, name))
+            continue
+        return plugin
+    return None
+
+
+def format_plugin_diagnostics(diags):
+    """Render plugin Diagnostic objects the way compilers do."""
+    lines = []
+    for d in diags or []:
+        loc = d.get("location") or {}
+        where = ""
+        if loc.get("file"):
+            where = "%s:%s:%s: " % (loc.get("file"), loc.get("line", 0),
+                                    loc.get("column", 0))
+        lines.append("%s%s: %s" % (where, d.get("severity", "error"),
+                                   d.get("message", "")))
+    return "\n".join(lines)
+
+
+def plugin_link_cc(tc, sources):
+    """A clang able to turn plugin-emitted LLVM IR into machine code.
+
+    C++ sources must link via clang++ (or clang driving C++ mode) so the
+    C++ runtime is pulled in; `clang file.ll` links as C and leaves
+    std:: symbols undefined.  g++ can never be used here: it cannot
+    consume LLVM IR.
+    """
+    if any(Path(s).suffix in CXX_SUFFIXES for s in sources):
+        if tc.kind == "clang" and tc.cxx_path:
+            return tc.cxx_path
+        if tc.cc_path:
+            sibling = tc.cc_path.parent / "clang++"
+            try:
+                if sibling.is_file() and os.access(sibling, os.X_OK):
+                    return sibling
+            except OSError:
+                pass
+        found, _ = Toolchain._find_by_names(CLANGXX_ONLY_NAMES)
+        if found:
+            return found
+    if tc.kind == "clang" and tc.cc_path:
+        return tc.cc_path
+    found, _ = Toolchain._find_by_names(CLANG_ONLY_NAMES)
+    return found
+
+
+def build_with_plugin(tc, plugin, sources, output, args):
+    """Compile every TU through the plugin and link the returned IR.
+
+    The clang plugin returns in-memory LLVM IR text (CompileResult
+    .mlir_module, emitted via `clang -S -emit-llvm`), so each result is
+    written to a temporary .ll and handed back to a real clang for
+    codegen + linking.
+    """
+    name = Path(plugin).name
+    flags = [f for f in common_compile_args(tc, args, sources)
+             if not f.startswith("--target=")]
+    if getattr(args, "shared", False) and "-fPIC" not in flags:
+        flags.append("-fPIC")
+    target = getattr(args, "target", None) \
+        or (host_machine() + "-" + host_os())
+    opt = PLUGIN_OPT_LEVEL.get(getattr(args, "opt_level", "default"),
+                               "default")
+
+    client = PluginClient(plugin)
+    try:
+        try:
+            info = client.initialize()
+        except PluginError as exc:
+            exc.exit_code = EXIT_MISSING_TOOL
+            raise
+        meta = (info.get("plugin_info") or {})
+        if getattr(args, "verbose", False):
+            print("plugin         %s v%s (protocol %s)"
+                  % (meta.get("name", name), meta.get("version", "?"),
+                     info.get("protocol_version", "?")))
+        try:
+            ir_texts = []
+            for src in sources:
+                result = client.compile({
+                    "source_path": str(Path(src).resolve()),
+                    "args": flags,
+                    "target_triple": target,
+                    "opt_level": opt,
+                    "diagnostics": True,
+                })
+                errors = [d for d in (result.get("diagnostics") or [])
+                          if d.get("severity") == "error"]
+                if errors:
+                    raise PluginError(format_plugin_diagnostics(errors),
+                                      EXIT_FAILURE)
+                ir = result.get("mlir_module")
+                if not isinstance(ir, str) or not ir.strip():
+                    raise PluginError("plugin returned no IR module for %s"
+                                      % src, EXIT_FAILURE)
+                ir_texts.append(ir)
+        except PluginError as exc:
+            raise PluginError("plugin '%s' compilation failed:\n%s"
+                              % (name, exc), EXIT_FAILURE)
+        except Exception as exc:
+            raise PluginError("plugin '%s' failed: %r" % (name, exc))
+    finally:
+        client.close()
+
+    link_cc = plugin_link_cc(tc, sources)
+    if link_cc is None:
+        raise MissingToolError("clang",
+                               purpose="linking plugin-emitted LLVM IR")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ll_files = []
+        for src, ir in zip(sources, ir_texts):
+            ll = Path(tmpdir) / (Path(src).stem + ".ll")
+            ll.write_text(ir)
+            ll_files.append(ll)
+        if getattr(args, "static_lib", False):
+            objects = []
+            for ll in ll_files:
+                obj = Path(tmpdir) / (ll.stem + ".o")
+                invoke_compiler([str(link_cc), "-c", str(ll), "-o", str(obj)],
+                                args, what="plugin IR object emission")
+                objects.append(obj)
+            ar = tc.find_tool("llvm-ar") or shutil.which("ar")
+            if ar is None:
+                raise MissingToolError("ar or llvm-ar",
+                                       purpose="static library builds")
+            out_lib = Path(output)
+            if out_lib.suffix != ".a":
+                if not out_lib.name.startswith("lib"):
+                    out_lib = out_lib.parent / ("lib" + out_lib.name)
+                out_lib = out_lib.with_suffix(".a")
+            invoke_compiler([str(ar), "rcs", str(out_lib)]
+                            + [str(o) for o in objects],
+                            args, what="archiving")
+            print("Built static library %s (via plugin %s)" % (out_lib, name))
+            return
+        cmd = [str(link_cc)]
+        if getattr(args, "shared", False):
+            cmd += ["-shared", "-fPIC"]
+        cmd += [str(f) for f in ll_files] + link_args(args, tc) \
+            + ["-o", str(output)]
+        invoke_compiler(cmd, args, what="linking plugin IR")
+    print("Built %s -> %s (via plugin %s)"
+          % (", ".join(str(s) for s in sources), output, name))
+
+
+def find_project_dir(paths):
+    """Return (project_dir, config) when a polyglot.toml project was given."""
+    if len(paths) == 1 and Path(paths[0]).is_dir():
+        cfg = Path(paths[0]) / "polyglot.toml"
+        if cfg.exists() and toml is not None:
+            try:
+                return Path(paths[0]), toml.load(cfg)
+            except Exception as exc:
+                err_print("warning: could not parse %s: %s" % (cfg, exc))
+    return None, None
+
+
+def project_sources_and_output(project_dir, config, default_output):
+    """Resolve [[bin]] / [language] config to (sources, output)."""
+    bins = config.get("bin", [])
+    output = default_output
+    if bins and bins[0].get("name"):
+        output = project_dir / bins[0]["name"]
+
+    language = (config.get("language") or {})
+    if language.get("rust"):
+        src_dir = project_dir / "src"
+        rust_src = src_dir / "main.rs"
+        if rust_src.exists():
+            return [rust_src], output
+        return [], output
+    # Every translation unit under src/ is part of the binary; skipping any
+    # of them would fail the link with undefined references.
+    sources = []
+    for ext in [".c", ".cpp", ".cc", ".cxx"]:
+        sources.extend(sorted((project_dir / "src").glob("*" + ext)))
+    if bins and "source" in bins[0]:
+        primary = project_dir / bins[0]["source"]
+        try:
+            known = {f.resolve() for f in sources}
+            dup = primary.resolve() in known
+        except OSError:
+            dup = primary in sources
+        if not dup:
+            sources.insert(0, primary)
+    return sources, output
+
+
+# --------------------------------------------------------------------------
+# Commands: build / run / check / emit-ir / emit-asm / preproc / deps
+# --------------------------------------------------------------------------
+
+def resolve_build_inputs(args):
+    """Shared input resolution for build-like commands.
+
+    Returns (sources, output, project_dir).  Exits friendly on bad inputs.
+    """
+    paths = [Path(p) for p in (args.paths or ["."])]
+    output = Path(args.output) if getattr(args, "output", None) else None
+
+    project_dir, config = find_project_dir(paths)
+    if project_dir is not None:
+        sources, proj_out = project_sources_and_output(project_dir, config,
+                                                       output or Path("a.out"))
+        args._project_dir = str(project_dir)
+        if not sources:
+            raise PolyglotError("No source file found in project at %s"
+                                % project_dir)
+        for f in sources:
+            if not Path(f).exists():
+                raise PolyglotError("Source file not found: %s" % f)
+        return sources, proj_out, project_dir, config
+
+    if not paths:
+        raise PolyglotError("nothing to build", EXIT_USAGE)
+    sources = []
+    for f in paths:
+        f = Path(f)
+        if not f.exists():
+            raise PolyglotError("Source file not found: %s" % f)
+        if f.is_dir():
+            raise PolyglotError("Expected source file, got directory: %s" % f)
+        sources.append(f)
+
+    if output is None:
+        output = sources[0].with_suffix("") if len(sources) == 1 else Path("a.out")
+    return sources, output, Path.cwd(), None
+
+
+def build_rust_project(tc, sources, output, args):
+    rustc = tc.find_tool("rustc")
+    if rustc is None:
+        raise MissingToolError("rustc", purpose="Rust builds")
+    cmd = [str(rustc), RUST_OPT_MAP.get(args.opt_level, "-Copt-level=2")]
+    cmd += [str(s) for s in sources] + ["-o", str(output)]
+    invoke_compiler(cmd, args)
+
+
+def cmd_build(tc, args):
+    sources, output, project_dir, config = resolve_build_inputs(args)
+    if config:
+        tc.apply_project_config(config)
+    if config and (config.get("language") or {}).get("rust"):
+        build_rust_project(tc, sources, output, args)
+        return
+    # discovery was deferred so polyglot.toml's [compiler] cc/cxx could take
+    # effect first; run it now (no-op when the config already supplied one)
+    tc.ensure_discovered()
+    plugin = choose_plugin(args, config, sources)
+    if plugin is not None:
+        try:
+            build_with_plugin(tc, plugin, sources, output, args)
+            return
+        except PluginError as exc:
+            if getattr(args, "plugin", None):
+                raise          # an explicit --plugin is mandatory
+            err_print("warning: plugin '%s' unusable (%s); falling back to "
+                      "the direct compiler" % (Path(plugin).name, exc))
+    extra = common_compile_args(tc, args, sources)
+    compile_to_exe(tc, sources, output, args, extra)
+    if not getattr(args, "static_lib", False):
+        print("Built %s -> %s" % (", ".join(str(s) for s in sources), output))
+
+
+def split_program_args(raw_args):
+    """Drop a single leading '--' separator, if present."""
+    if raw_args and raw_args[0] == "--":
+        return raw_args[1:]
+    return list(raw_args)
+
+
+def cmd_run(tc, args):
+    sources = [Path(args.file)]
+    if not sources[0].exists():
+        raise PolyglotError("Source file not found: %s" % sources[0])
+    args._project_dir = str(Path.cwd())
+    with tempfile.TemporaryDirectory() as tmpdir:
+        exe = Path(tmpdir) / "polyglot_run"
+        if sources[0].suffix == ".rs":
+            build_rust_project(tc, sources, exe, args)
         else:
-            print(f"Cleaned {removed} artifacts")
+            extra = common_compile_args(tc, args, sources)
+            compile_to_exe(tc, sources, exe, args, extra)
+        program = [str(exe)] + split_program_args(args.args or [])
+        proc = run_cmd(program)
+        sys.exit(exit_status(proc.returncode))
 
-    def init(self, args):
-        """Initialize a new project."""
-        name = args.name or "my-project"
-        language = args.language or "c"
 
-        project_dir = Path(name)
-        project_dir.mkdir(exist_ok=True)
+def cmd_check(tc, args):
+    failures = 0
+    sources = [Path(p) for p in args.paths]
+    for f in sources:
+        if not f.exists():
+            raise PolyglotError("Source file not found: %s" % f)
+    for f in sources:
+        print("Checking %s..." % f)
+        compiler = tc.compiler_for([f])
+        cmd = [compiler, "-fsyntax-only"] + common_compile_args(tc, args, [f])
+        cmd += [str(f)]
+        log_running(cmd, args)
+        proc = run_cmd(cmd)
+        if proc.returncode == 0:
+            print(green("OK   %s" % f))
+        else:
+            print(red("FAIL %s" % f))
+            failures += 1
+    if failures:
+        raise PolyglotError("syntax check failed for %d file(s)" % failures,
+                            EXIT_FAILURE)
+    print("All files passed syntax check")
 
-        # Use basename for project name to avoid path issues
-        project_name = project_dir.name
 
-        plugin_name = "clang" if language in ("c", "cpp") else "rustc"
-        ext = "cpp" if language == "cpp" else "c"
+_PATH_FLAG_PAIRS = ("I", "isystem", "iquote", "include", "idirafter", "L")
 
+
+def _absolutize_path_flags(flags, base):
+    """Rewrite path-bearing flags to absolute form (against `base`).
+
+    Needed because the GCC emit-ir path runs the compiler inside a temporary
+    directory: relative -I/-include/-L values would otherwise resolve there
+    and break the build.
+    """
+    out = []
+    i = 0
+    while i < len(flags):
+        f = str(flags[i])
+        if f in ["-%s" % n for n in _PATH_FLAG_PAIRS] and i + 1 < len(flags):
+            p = Path(flags[i + 1])
+            out.append(f)
+            out.append(str(p if p.is_absolute() else (base / p).resolve()))
+            i += 2
+            continue
+        if len(f) > 2 and f[0] == "-" and f[1] in "IL" and f[2] != "=":
+            p = Path(f[2:])
+            if not p.is_absolute():
+                out.append(f[:2] + str((base / p).resolve()))
+                i += 1
+                continue
+        out.append(f)
+        i += 1
+    return out
+
+
+def _emit_ir_one(tc, src, args, out_path):
+    """Emit IR for one TU.  clang -> LLVM IR (.ll); gcc -> GIMPLE dump."""
+    compiler = tc.compiler_for([src])
+    extra = common_compile_args(tc, args, [src], for_emit=True)
+    if tc.kind == "clang":
+        cmd = [compiler] + extra + ["-S", "-emit-llvm", str(src)]
+        if out_path:
+            cmd += ["-o", str(out_path)]
+        invoke_compiler(cmd, args, what="IR emission")
+        dest = out_path or Path.cwd() / (Path(src).stem + ".ll")
+        print("Wrote LLVM IR %s" % dest)
+        return
+    # GCC: GIMPLE dumps are written to the current directory, so run inside
+    # a scratch dir and fish the dump out afterwards.  The compiler's cwd
+    # changes, so relative user paths must be absolutized first.
+    extra = _absolutize_path_flags(extra, Path.cwd())
+    src_abs = Path(src).resolve()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cmd = [compiler] + extra + ["-fdump-tree-gimple", "-S", str(src_abs),
+                                    "-o", str(Path(tmpdir) / "out")]
+        log_running(cmd, args)
+        proc = run_cmd(cmd, cwd=tmpdir)
+        if proc.returncode != 0:
+            raise PolyglotError("IR emission failed with exit code %d"
+                                % proc.returncode, proc.returncode or EXIT_FAILURE)
+        dumps = sorted(Path(tmpdir).glob("*.gimple"))
+        if not dumps:
+            raise PolyglotError("GCC produced no GIMPLE dump for %s" % src)
+        dest = out_path or Path.cwd() / (Path(src).stem + ".gimple")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(dumps[-1], dest)
+        print(yellow("note: GCC backend emits GIMPLE (not LLVM IR) -> %s" % dest))
+
+
+def cmd_emit_ir(tc, args):
+    for src in [Path(p) for p in args.paths]:
+        if not src.exists():
+            raise PolyglotError("Source file not found: %s" % src)
+    out = Path(args.output) if args.output else None
+    if out is not None and len(args.paths) > 1:
+        raise PolyglotError("-o with multiple sources is ambiguous; emit one "
+                            "file at a time", EXIT_USAGE)
+    ext = ".ll" if tc.kind == "clang" else ".gimple"
+    seen = {}
+    for src in [Path(p) for p in args.paths]:
+        out_path = out
+        if out is None:
+            # duplicate stems would overwrite each other's default dump
+            # (cwd/<stem><ext>); disambiguate with the parent directory
+            stem = Path(src).stem
+            if stem in seen and seen[stem].resolve() != Path(src).resolve():
+                parts = [q for q in Path(src).parent.parts
+                         if q not in ("/", ".")]
+                prefix = "_".join(parts)
+                name = ((prefix + "_") if prefix else "dup_") + stem + ext
+                out_path = Path.cwd() / name
+            seen[stem] = Path(src)
+        _emit_ir_one(tc, src, args, out_path)
+
+
+def cmd_emit_asm(tc, args):
+    for src in [Path(p) for p in args.paths]:
+        if not src.exists():
+            raise PolyglotError("Source file not found: %s" % src)
+    compiler = tc.compiler_for(args.paths)
+    extra = common_compile_args(tc, args, args.paths)
+    if getattr(args, "intel", False):
+        extra.append("-masm=intel")
+    cmd = [compiler] + extra + [str(s) for s in args.paths] + ["-S"]
+    if args.output:
+        cmd += ["-o", args.output]
+    invoke_compiler(cmd, args, what="assembly emission")
+    if args.output:
+        print("Wrote assembly %s" % args.output)
+    else:
+        for s in args.paths:
+            print("Wrote assembly %s" % (Path.cwd() / (Path(s).stem + ".s")))
+
+
+def cmd_preproc(tc, args):
+    src = Path(args.file)
+    if not src.exists():
+        raise PolyglotError("Source file not found: %s" % src)
+    compiler = tc.compiler_for([src])
+    cmd = [compiler] + common_compile_args(tc, args, [src]) + ["-E", str(src)]
+    if getattr(args, "no_lines", False):
+        cmd.append("-P")
+    if args.output:
+        cmd += ["-o", args.output]
+        invoke_compiler(cmd, args, what="preprocessing")
+        print("Preprocessed %s -> %s" % (src, args.output))
+        return
+    proc = run_cmd(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stderr or "")
+        raise PolyglotError("preprocessing failed with exit code %d"
+                            % proc.returncode, proc.returncode or EXIT_FAILURE)
+    sys.stdout.write(proc.stdout or "")
+
+
+def cmd_deps(tc, args):
+    src = Path(args.file)
+    if not src.exists():
+        raise PolyglotError("Source file not found: %s" % src)
+    compiler = tc.compiler_for([src])
+    cmd = [compiler] + common_compile_args(tc, args, [src]) + ["-MM", str(src)]
+    if getattr(args, "target_name", None):
+        cmd += ["-MT", args.target_name]
+    if args.output:
+        cmd += ["-MF", args.output]
+    proc = run_cmd(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stderr or "")
+        raise PolyglotError("dependency generation failed with exit code %d"
+                            % proc.returncode, proc.returncode or EXIT_FAILURE)
+    if args.output:
+        print("Wrote dependency file %s" % args.output)
+    else:
+        sys.stdout.write(proc.stdout or "")
+
+
+# --------------------------------------------------------------------------
+# Commands: doctor / targets / fmt / tidy / repl / jit / mca / analyze / watch
+# --------------------------------------------------------------------------
+
+def detect_plugins(plugin_dir):
+    """Executable plugin candidates for the doctor report: everything in
+    --plugin-dir plus polyglot-* binaries in target/release (deduped by
+    name, plugin-dir first)."""
+    found = {}
+    roots = [Path(plugin_dir).expanduser()]
+    script_dir = Path(__file__).resolve().parent
+    for base in (script_dir / "target" / "release",
+                 Path.cwd() / "target" / "release"):
+        if base not in roots:
+            roots.append(base)
+    for root in roots:
+        release_scan = root.name == "release" and root.parent.name == "target"
+        try:
+            entries = sorted(root.iterdir())
+        except OSError:
+            continue
+        for f in entries:
+            if not (f.is_file() and os.access(f, os.X_OK)):
+                continue
+            if release_scan and not (f.name.startswith("polyglot-")
+                                     and f.name != "polyglot-driver"):
+                continue
+            found.setdefault(f.name, f)
+    return [found[k] for k in sorted(found)]
+
+
+def cmd_doctor(tc, args):
+    problems = []
+
+    def line(label, ok, detail):
+        mark = green("ok  ") if ok else red("MISS")
+        print("  %s %-14s %s" % (mark, label, detail))
+        if not ok:
+            problems.append(label)
+
+    print("=" * 62)
+    print("POLYGLOT ENVIRONMENT REPORT (doctor)")
+    print("=" * 62)
+    print("  driver          polyglot %s (python %s)"
+          % (VERSION, ".".join(map(str, sys.version_info[:3]))))
+
+    if tc.cc_path is None:
+        line("C compiler", False,
+             "not found (install clang/gcc or set POLYGLOT_CC)")
+    else:
+        line("C compiler", True, "%s [%s]" % (tc.cc_path, tc.version))
+    if tc.found_off_path:
+        print(yellow("  hint            clang was found off-PATH; consider:\n"
+                     "                    export PATH=%s:$PATH"
+                     % tc.cc_path.parent))
+    if tc.cxx_path:
+        line("C++ compiler", True, str(tc.cxx_path))
+    else:
+        line("C++ compiler", False, "clang++/g++ not found (C++ builds disabled)")
+    print("  backend         %s" % (tc.kind or "none"))
+
+    plugins = detect_plugins(getattr(args, "plugin_dir", None)
+                             or "~/.polyglot/plugins")
+    print("  %-18s%s" % ("plugins",
+                        ", ".join(str(p) for p in plugins)
+                        if plugins else "none detected "
+                        "(see 'Plugin architecture' in docs/user-guide/commands.md)"))
+
+    if shutil.which("clang") is None:
+        clang_off = Toolchain._find_by_names(CLANG_ONLY_NAMES)[0]
+        if clang_off is not None:
+            print(yellow("  hint            clang is not on PATH but exists at:\n"
+                         "                    %s\n"
+                         "                  consider: export PATH=%s:$PATH"
+                         % (clang_off, clang_off.parent)))
+
+    print("-" * 62)
+    print("Auxiliary tools:")
+    for name, purpose in AUX_TOOLS.items():
+        p = tc.find_tool(name)
+        line(name, p is not None, str(p) if p else "(%s)" % purpose)
+
+    print("-" * 62)
+    cache_dir = Path.cwd() / ".polyglot-cache"
+    if cache_dir.is_dir():
+        objs = list(cache_dir.glob("*.o"))
+        size = sum(f.stat().st_size for f in objs if f.is_file())
+        print("  build cache     %s (%d object(s), %.1f KiB)"
+              % (cache_dir, len(objs), size / 1024.0))
+    else:
+        print("  build cache     %s (empty - will be created on first build)"
+              % cache_dir)
+
+    print("=" * 62)
+    if problems and getattr(args, "strict", False):
+        raise PolyglotError("doctor --strict: %d component(s) missing: %s"
+                            % (len(problems), ", ".join(problems)), EXIT_FAILURE)
+    if problems:
+        print(yellow("%d component(s) missing; affected features degrade "
+                     "gracefully." % len(problems)))
+    else:
+        print(green("All components present."))
+
+
+def cmd_targets(tc, args):
+    host = host_machine()
+    rows = []
+    for triple, note in KNOWN_TARGETS:
+        arch = triple.split("-")[0]
+        if arch == host:
+            status, why = green("native"), "this host's architecture"
+        elif "wasm" in arch:
+            ld = tc.find_tool("wasm-ld") or tc.find_tool("lld")
+            if tc.kind == "clang" and ld:
+                status, why = green("ok"), "clang cross + %s" % ld.name
+            else:
+                status, why = yellow("needs-wasm-ld" if tc.kind == "clang"
+                                     else "unavailable"), \
+                    "wasm linking requires wasm-ld/lld"
+        elif tc.kind == "clang":
+            status, why = green("ok"), "clang is a cross compiler; link needs " \
+                                       "target sysroot/libs"
+        else:
+            gcc_cross = "%s-linux-gnu-gcc" % arch
+            if shutil.which(gcc_cross):
+                status, why = green("ok"), "via installed cross toolchain %s" \
+                    % gcc_cross
+            else:
+                status, why = yellow("needs-cross-gcc"), \
+                    "GCC requires '%s' (apt install gcc-%s-linux-gnu)" \
+                    % (gcc_cross, "aarch64" if arch == "aarch64" else arch)
+        rows.append((triple, status, why))
+
+    print("%-34s %-16s %s" % ("TARGET TRIPLE", "STATUS", "NOTES"))
+    print("-" * 96)
+    for triple, status, why in rows:
+        print("%-34s %-16s %s" % (triple, status, why))
+    print("\nUse with: polyglot --target TRIPLE build ...")
+
+
+FMT_SOURCE_EXTS = {".c", ".cc", ".cpp", ".h", ".hpp"}
+
+
+def cmd_fmt(tc, args):
+    cf = tc.tool_or_error("clang-format", "code formatting")
+    if getattr(args, "dump_config", False):
+        proc = run_cmd([str(cf), "-style=" + args.style, "-dump-config"],
+                       capture_output=True, text=True)
+        sys.stdout.write(proc.stdout)
+        sys.exit(exit_status(proc.returncode))
+    if not args.paths:
+        raise PolyglotError("fmt: no files given", EXIT_USAGE)
+    if args.check and args.in_place:
+        raise PolyglotError("fmt: --check and -i cannot be combined",
+                            EXIT_USAGE)
+    # directories are expanded to their C/C++ sources so documented
+    # invocations like `polyglot fmt --check src/` work
+    files = []
+    for f in args.paths:
+        path = Path(f)
+        if path.is_dir():
+            matches = sorted(p for p in path.rglob("*")
+                             if p.is_file() and p.suffix in FMT_SOURCE_EXTS)
+            if not matches:
+                raise PolyglotError(
+                    "fmt: no C/C++ sources (*.c *.cc *.cpp *.h *.hpp) "
+                    "found under %s" % path)
+            files.extend(matches)
+        else:
+            if not path.exists():
+                raise PolyglotError("file not found: %s" % path)
+            files.append(path)
+    changed = []
+    for path in files:
+        if args.in_place:
+            proc = run_cmd([str(cf), "-style=" + args.style, "-i", str(path)])
+            if proc.returncode != 0:
+                raise PolyglotError("clang-format failed on %s" % path)
+            print("formatted  %s" % path)
+            continue
+        proc = run_cmd([str(cf), "-style=" + args.style, str(path)],
+                       capture_output=True, text=True)
+        if proc.returncode != 0:
+            sys.stderr.write(proc.stderr or "")
+            raise PolyglotError("clang-format failed on %s" % path)
+        if args.check:
+            if proc.stdout != path.read_text():
+                changed.append(str(path))
+        else:
+            sys.stdout.write(proc.stdout)
+    if args.check:
+        if changed:
+            for f in changed:
+                print(red("would reformat: %s" % f))
+            raise PolyglotError("%d file(s) need formatting" % len(changed),
+                                EXIT_FAILURE)
+        print(green("all files already formatted"))
+
+
+def cmd_tidy(tc, args):
+    tidy = tc.tool_or_error("clang-tidy", "static linting")
+    if not args.paths:
+        raise PolyglotError("tidy: no files given", EXIT_USAGE)
+    rc = 0
+    for f in args.paths:
+        cmd = [str(tidy), str(f)]
+        if getattr(args, "checks", None):
+            cmd.append("--checks=" + args.checks)
+        if getattr(args, "fix", False):
+            cmd.append("--fix")
+        cmd += list(args.extra or [])
+        proc = run_cmd(cmd)
+        rc = rc or proc.returncode
+    sys.exit(rc if 0 <= rc < 256 else EXIT_FAILURE)
+
+
+def cmd_repl(tc, args):
+    repl = tc.tool_or_error("clang-repl", "interactive REPL")
+    os.execv(str(repl), [str(repl)] + list(args.extra or []))
+
+
+def cmd_jit(tc, args):
+    lli = tc.tool_or_error("lli", "JIT execution of LLVM bitcode/IR")
+    src = Path(args.file)
+    if not src.exists():
+        raise PolyglotError("file not found: %s" % src)
+    if src.suffix not in (".ll", ".bc"):
+        raise PolyglotError("jit expects a .ll or .bc file (use 'polyglot "
+                            "emit-ir' first)", EXIT_USAGE)
+    proc = run_cmd([str(lli), str(src)] + split_program_args(args.extra or []))
+    sys.exit(exit_status(proc.returncode))
+
+
+def cmd_mca(tc, args):
+    mca = tc.tool_or_error("llvm-mca", "machine code analysis")
+    src = Path(args.file)
+    if not src.exists():
+        raise PolyglotError("file not found: %s" % src)
+    cmd = [str(mca), "--iterations=%d" % max(1, args.iterations)]
+    if getattr(args, "mcpu", None):
+        cmd.append("--mcpu=" + args.mcpu)
+    if src.suffix == ".s":
+        cmd.append(str(src))
+        proc = run_cmd(cmd, capture_output=True, text=True)
+    else:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            asm = Path(tmpdir) / (src.stem + ".s")
+            compiler = tc.compiler_for([src])
+            extra = common_compile_args(tc, args, [src])
+            ccmd = [compiler] + extra + ["-S", str(src), "-o", str(asm)]
+            invoke_compiler(ccmd, args, what="assembly emission for mca")
+            cmd.append(str(asm))
+            proc = run_cmd(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stderr or "")
+        raise PolyglotError("llvm-mca failed with exit code %d" % proc.returncode,
+                            proc.returncode or EXIT_FAILURE)
+    sys.stdout.write(proc.stdout or "")
+
+
+def cmd_analyze(tc, args):
+    if tc.kind != "clang":
+        raise PolyglotError(
+            "the static analyzer requires the clang backend "
+            "(retry with: polyglot --compiler clang analyze ...)",
+            EXIT_MISSING_TOOL)
+    bad = []
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for i, f in enumerate(args.paths):
+            if not Path(f).exists():
+                raise PolyglotError("Source file not found: %s" % f)
+            # reports go to a scratch dir: --analyze exits 0 even when it
+            # finds defects, and without -o a stray <name>.plist would be
+            # dropped into the current directory
+            report = Path(tmpdir) / ("report_%d.plist" % i)
+            cmd = [str(tc.cc_path), "--analyze", "-o", str(report), str(f)]
+            log_running(cmd, args)
+            proc = run_cmd(cmd, capture_output=True, text=True)
+            sys.stderr.write(proc.stderr or "")
+            if proc.returncode != 0:
+                bad.append(str(f))
+                continue
+            try:
+                with open(report, "rb") as fh:
+                    data = plistlib.load(fh)
+            except (OSError, ValueError, plistlib.InvalidFileException):
+                data = {}
+            if data.get("diagnostics"):
+                bad.append(str(f))
+    if bad:
+        raise PolyglotError("static analysis reported issues in: %s"
+                            % ", ".join(bad), EXIT_FAILURE)
+
+
+def cmd_watch(tc, args):
+    src = Path(args.file)
+    if not src.exists():
+        raise PolyglotError("Source file not found: %s" % src)
+    tmpdir = tempfile.mkdtemp(prefix="polyglot_watch_")
+    exe = Path(tmpdir) / "watch_out"
+    quiet = args.quiet
+    args.quiet = True          # watch output stays readable
+    deadline = time.time() + args.timeout if args.timeout else None
+    last_mtime = None
+
+    def stamp():
+        return time.strftime("%H:%M:%S")
+
+    def rebuild():
+        t0 = time.time()
+        try:
+            extra = common_compile_args(tc, args, [src])
+            compile_to_exe(tc, [src], exe, args, extra)
+            ms = int((time.time() - t0) * 1000)
+            print(green("[%s] rebuilt ok (%dms)" % (stamp(), ms)))
+        except PolyglotError as exc:
+            print(red("[%s] rebuild failed: %s" % (stamp(), exc)))
+
+    try:
+        rebuild()
+        last_mtime = src.stat().st_mtime
+        while True:
+            time.sleep(0.5)
+            try:
+                mtime = src.stat().st_mtime
+            except OSError:
+                continue
+            if mtime != last_mtime:
+                last_mtime = mtime
+                rebuild()
+            if deadline and time.time() >= deadline:
+                break
+    finally:
+        args.quiet = quiet
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    # Ctrl-C propagates to main()'s handler ("Interrupted.", exit 130)
+
+
+# --------------------------------------------------------------------------
+# Commands: stats / init / clean / version
+# --------------------------------------------------------------------------
+
+CLANG_TIME_ROW = re.compile(
+    r"^\s+(?P<cols>(?:[\d.]+ \(\s*[\d.]+%\)\s*){2,4})(?P<phase>\S.*?)\s*$")
+GCC_TIME_ROW = re.compile(r"^\s*(?P<phase>[A-Za-z][^:]*?)\s*:\s*"
+                          r"(?P<secs>[\d.]+)\s*\(\s*(?P<pct>[\d.]+)%\)")
+CLANG_TOTAL = re.compile(r"Total Execution Time:\s*([\d.]+)")
+
+
+def parse_time_report(text, kind):
+    """Best-effort parse of clang 'Pass execution timing report' or GCC
+    'Time variable' tables into [{phase, seconds}]."""
+    phases = []
+    in_gcc_table = False
+    for line in text.splitlines():
+        if kind == "gcc":
+            if "Time variable" in line:
+                in_gcc_table = True
+                continue
+            if in_gcc_table:
+                m = GCC_TIME_ROW.match(line)
+                if m:
+                    phases.append({"phase": m.group("phase").strip(),
+                                   "seconds": float(m.group("secs"))})
+                continue
+        else:
+            m = CLANG_TIME_ROW.match(line)
+            if m:
+                name = m.group("phase").strip()
+                if name and not name.startswith("-"):
+                    # columns: user, system, user+system, wall (each "s (pct)")
+                    pairs = re.findall(r"([\d.]+) \(\s*[\d.]+%\)",
+                                       m.group("cols"))
+                    secs = float(pairs[2]) if len(pairs) > 2 else None
+                    phases.append({"phase": name, "seconds": secs})
+            mt = CLANG_TOTAL.search(line)
+            if mt:
+                phases.append({"phase": "TOTAL", "seconds": float(mt.group(1))})
+    return phases
+
+
+def binary_size(tc, path):
+    """llvm-size -B total when available, else raw file size."""
+    sz = tc.find_tool("llvm-size")
+    if sz:
+        try:
+            proc = run_cmd([str(sz), "-B", str(path)], capture_output=True,
+                           text=True)
+            if proc.returncode == 0:
+                lines = [l for l in proc.stdout.splitlines() if l.strip()]
+                if len(lines) >= 2:
+                    dec = lines[-1].split()
+                    if len(dec) >= 4 and dec[3].isdigit():
+                        return int(dec[3])
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return None
+
+
+def cmd_stats(tc, args):
+    sources = [Path(p) for p in args.paths]
+    for f in sources:
+        if not f.exists():
+            raise PolyglotError("Source file not found: %s" % f)
+
+    has_json = getattr(args, "json", False)
+    compiler = tc.compiler_for(sources)
+    extra = common_compile_args(tc, args, sources, for_emit=True)
+    extra.append("-ftime-report")
+    if tc.kind == "gcc":
+        extra = [f for f in extra if f != "-fno-discard-value-names"]
+
+    t0 = time.time()
+    cmd = [compiler] + extra + [str(f) for f in sources] + ["-o", "/dev/null"]
+    if not has_json:           # keep stdout pure JSON in --json mode
+        log_running(cmd, args)
+    proc = run_cmd(cmd, capture_output=True, text=True)
+    total_ms = int((time.time() - t0) * 1000)
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stderr or "")
+        raise PolyglotError("compilation failed with exit code %d"
+                            % proc.returncode, proc.returncode or EXIT_FAILURE)
+
+    timings = parse_time_report(proc.stderr or "", tc.kind)
+
+    # Binary size at the requested optimization level.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_exe = Path(tmpdir) / "pg_stats_out"
+        bcmd = [compiler] + common_compile_args(tc, args, sources) \
+            + [str(f) for f in sources] + ["-o", str(tmp_exe)]
+        run_cmd(bcmd, capture_output=True)
+        bsize = binary_size(tc, tmp_exe) if tmp_exe.exists() else None
+
+    if has_json:
+        payload = {
+            "source": [str(f) for f in sources],
+            "size_bytes": sum(f.stat().st_size for f in sources),
+            "lines": sum(len(f.read_text(errors="replace").splitlines())
+                         for f in sources),
+            "target": getattr(args, "target", None) or "native",
+            "opt_level": args.opt_level,
+            "backend": tc.kind,
+            "compiler_version": tc.version,
+            "total_ms": total_ms,
+            "binary_size_bytes": bsize,
+            "timings": timings,
+        }
+        print(json.dumps(payload, indent=2))
+        return
+
+    print("=" * 60)
+    print("COMPILATION STATISTICS")
+    print("=" * 60)
+    print("Source files: %d" % len(sources))
+    for f in sources:
+        size = f.stat().st_size
+        lines = len(f.read_text(errors="replace").splitlines())
+        print("  %s: %d bytes, %d lines" % (f, size, lines))
+
+    print("\nTarget: %s" % (getattr(args, "target", None) or "native"))
+    print("Optimization: %s" % args.opt_level)
+    print("Backend: %s (%s)" % (tc.kind, tc.version))
+
+    print("\n" + "-" * 60)
+    print("COMPILATION TIME REPORT (%s format)" % tc.kind)
+    print("-" * 60)
+    for ph in timings:
+        if ph.get("seconds") is not None:
+            print("  %-40s %8.4f s" % (ph["phase"], ph["seconds"]))
+        else:
+            print("  %s" % ph["phase"])
+    if not timings:
+        print("  (no timing rows recognized - raw report on stderr above)")
+
+    if bsize is not None:
+        print("\nBinary size: %s bytes" % format(bsize, ","))
+    print("Total wall time: %d ms" % total_ms)
+    print("\n" + "=" * 60)
+
+
+GITIGNORE_STUB = """# Polyglot build artifacts
+*.o
+*.obj
+*.ll
+*.s
+*.bc
+a.out
+.polyglot-cache/
+/target/
+"""
+
+
+def cmd_init(tc, args):
+    name = args.name or "my-project"
+    language = args.language or "c"
+    project_dir = Path(name)
+    project_dir.mkdir(exist_ok=True)
+    project_name = project_dir.name
+    ext = {"c": "c", "cpp": "cpp", "rust": "rs"}.get(language, "c")
+
+    if language == "rust":
+        config = f"""[project]
+name = "{project_name}"
+version = "0.1.0"
+
+[language]
+rust = true
+
+[target]
+triple = "{host_machine()}-{host_os()}"
+opt_level = 2
+
+[[bin]]
+name = "{project_name}"
+source = "src/main.rs"
+"""
+        sample = '''fn main() {
+    println!("Hello from Polyglot!");
+}
+'''
+    else:
+        plugin_name = "clang" if language == "cpp" else "rustc"
         config = f"""[project]
 name = "{project_name}"
 version = "0.1.0"
 
 [target]
-triple = "{os.uname().machine}-unknown-linux-gnu"
+triple = "{host_machine()}-{host_os()}"
 opt_level = 2
 
 [plugins]
@@ -276,13 +2027,6 @@ opt_level = 2
 name = "{project_name}"
 source = "src/main.{ext}"
 """
-        (project_dir / "polyglot.toml").write_text(config)
-
-        # Create source directory
-        src_dir = project_dir / "src"
-        src_dir.mkdir(exist_ok=True)
-
-        # Create sample source file
         if language == "cpp":
             sample = '''#include <iostream>
 
@@ -299,165 +2043,360 @@ int main() {
     return 0;
 }
 '''
-        (src_dir / f"main.{ext}").write_text(sample)
 
-        print(f"Project created at: {project_dir}")
-        print("Run 'polyglot build' to build.")
+    (project_dir / "polyglot.toml").write_text(config)
+    src_dir = project_dir / "src"
+    src_dir.mkdir(exist_ok=True)
+    (src_dir / ("main." + ext)).write_text(sample)
+    (project_dir / ".gitignore").write_text(GITIGNORE_STUB)
+    (project_dir / "README.md").write_text(
+        "# %s\n\nA Polyglot project (created by `polyglot init --language %s`).\n"
+        "\n## Build\n\n    polyglot build\n\n## Run\n\n    polyglot run src/main.%s\n"
+        % (project_name, language, ext))
 
-    def stats(self, args):
-        """Show compilation statistics."""
-        source_files = [Path(p) for p in args.paths]
-        for f in source_files:
-            if not f.exists():
-                print(f"Error: Source file not found: {f}", file=sys.stderr)
-                sys.exit(1)
+    print("Project created at: %s" % project_dir)
+    print("Run 'polyglot build' to build.")
 
-        has_cpp = any(f.suffix in [".cpp", ".cc", ".cxx", ".c++"] for f in source_files)
-        compiler = self.clangxx_path if has_cpp else self.clang_path
 
-        print("=" * 60)
-        print("COMPILATION STATISTICS")
-        print("=" * 60)
-        print(f"Source files: {len(source_files)}")
-        for f in source_files:
-            size = f.stat().st_size
-            lines = len(f.read_text().splitlines())
-            print(f"  {f}: {size} bytes, {lines} lines")
+def cmd_clean(tc, args):
+    project_dir = Path(args.path)
+    removed = 0
+    patterns = ["*.o", "*.obj", "*.exe", "a.out", "*.ll", "*.s", "*.bc"]
+    for pattern in patterns:
+        for f in project_dir.glob(pattern):
+            if f.is_file():
+                try:
+                    f.unlink()
+                    print("Removed %s" % f)
+                    removed += 1
+                except OSError as exc:
+                    err_print("could not remove %s: %s" % (f, exc))
 
-        print(f"\nTarget: {args.target or 'native'}")
-        print(f"Optimization: {args.opt_level}")
-
-        # Compile with stats
-        has_cpp = any(f.suffix in [".cpp", ".cc", ".cxx", ".c++"] for f in source_files)
-        compiler = self.clangxx_path if has_cpp else self.clang_path
-
-        cmd = [compiler] + [str(f) for f in source_files] + ["-o", "/dev/null"]
-        if args.target:
-            cmd.append(f"--target={args.target}")
-
-        opt_map = {
-            "none": "-O0", "less": "-O1", "default": "-O2",
-            "aggressive": "-O3", "size": "-Os", "size-aggressive": "-Oz",
-        }
-        cmd.append(opt_map.get(args.opt_level, "-O2"))
-        cmd.extend(["-ftime-report", "-fno-discard-value-names"])
-
-        print(f"\nRunning: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
-
-        if result.returncode != 0:
-            print(f"Compilation failed: {result.stderr}", file=sys.stderr)
-            sys.exit(result.returncode)
-
-        # Parse time report
-        print("\n" + "-" * 60)
-        print("CLANG TIME REPORT")
-        print("-" * 60)
-        for line in result.stderr.splitlines():
-            if any(keyword in line.lower() for keyword in ["time", "memory", "bytes", "instructions", "blocks"]):
-                print(f"  {line.strip()}")
-
-        # Also show binary size with default optimization
-        with tempfile.NamedTemporaryFile(suffix=".out", delete=False) as tmp:
-            tmp_path = tmp.name
+    config_file = project_dir / "polyglot.toml"
+    if config_file.exists() and toml is not None:
         try:
-            build_cmd = [compiler] + [str(f) for f in source_files] + ["-o", tmp_path]
-            if args.target:
-                build_cmd.append(f"--target={args.target}")
-            build_cmd.append(opt_map.get(args.opt_level, "-O2"))
-            subprocess.run(build_cmd, capture_output=True)
-            if os.path.exists(tmp_path):
-                size = os.path.getsize(tmp_path)
-                print(f"\nBinary size: {size:,} bytes")
-            os.unlink(tmp_path)
+            config = toml.load(config_file)
+            for bin_cfg in config.get("bin", []):
+                name = bin_cfg.get("name")
+                if name:
+                    continue  # executables are left alone by default
         except Exception:
             pass
 
-        print("\n" + "=" * 60)
+    cache = BuildCache(project_dir)
+    removed += cache.clear()
+    for f in project_dir.glob(".polyglot-cache/*.tmp"):
+        try:
+            f.unlink()
+            removed += 1
+        except OSError:
+            pass
 
-    def version(self):
-        print("polyglot 0.1.0")
-
-
-def main():
-    parser = argparse.ArgumentParser(prog="polyglot", description="Universal Compiler Driver")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
-    parser.add_argument("--target", help="Target triple")
-    parser.add_argument("--opt-level", choices=["none", "less", "default", "aggressive", "size", "size-aggressive"],
-                       default="default", help="Optimization level")
-    parser.add_argument("-o", "--output", help="Output file")
-    parser.add_argument("--plugin", help="Plugin to use")
-    parser.add_argument("--plugin-dir", default="~/.polyglot/plugins", help="Plugin directory")
-
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    # Build command
-    build_parser = subparsers.add_parser("build", help="Build a source file or project")
-    build_parser.add_argument("paths", nargs="*", help="Source files or project directory")
-    build_parser.add_argument("-o", "--output", help="Output file")
-
-    # Run command
-    run_parser = subparsers.add_parser("run", help="Build and run a source file")
-    run_parser.add_argument("file", help="Source file to run")
-    run_parser.add_argument("args", nargs=argparse.REMAINDER, help="Program arguments")
-
-    # Check command (syntax check only)
-    check_parser = subparsers.add_parser("check", help="Check syntax without building")
-    check_parser.add_argument("paths", nargs="+", help="Source files to check")
-
-    # Emit IR command
-    ir_parser = subparsers.add_parser("emit-ir", help="Emit LLVM IR")
-    ir_parser.add_argument("paths", nargs="+", help="Source files")
-    ir_parser.add_argument("-o", "--output", help="Output file")
-
-    # Emit Assembly command
-    asm_parser = subparsers.add_parser("emit-asm", help="Emit assembly")
-    asm_parser.add_argument("paths", nargs="+", help="Source files")
-    asm_parser.add_argument("-o", "--output", help="Output file")
-
-    # Clean command
-    clean_parser = subparsers.add_parser("clean", help="Clean build artifacts")
-    clean_parser.add_argument("path", nargs="?", default=".", help="Project directory")
-
-    # Stats command
-    stats_parser = subparsers.add_parser("stats", help="Show compilation statistics")
-    stats_parser.add_argument("paths", nargs="+", help="Source files")
-    stats_parser.add_argument("--target", help="Target triple")
-    stats_parser.add_argument("--opt-level", choices=["none", "less", "default", "aggressive", "size", "size-aggressive"],
-                       default="default", help="Optimization level")
-
-    # Init command
-    init_parser = subparsers.add_parser("init", help="Initialize a new project")
-    init_parser.add_argument("name", nargs="?", help="Project name")
-    init_parser.add_argument("--language", choices=["c", "cpp", "rust"], help="Language")
-
-    # Version command
-    subparsers.add_parser("version", help="Show version")
-
-    args = parser.parse_args()
-
-    driver = PolyglotDriver()
-
-    if args.command == "build":
-        driver.build(args)
-    elif args.command == "run":
-        driver.run(args)
-    elif args.command == "check":
-        driver.check(args)
-    elif args.command == "emit-ir":
-        driver.emit_ir(args)
-    elif args.command == "emit-asm":
-        driver.emit_asm(args)
-    elif args.command == "clean":
-        driver.clean(args)
-    elif args.command == "stats":
-        driver.stats(args)
-    elif args.command == "init":
-        driver.init(args)
-    elif args.command == "version":
-        driver.version()
+    if removed == 0:
+        print("No build artifacts to clean")
     else:
-        parser.print_help()
+        print("Cleaned %d artifacts" % removed)
+
+
+def cmd_version(tc, args):
+    print("polyglot %s" % VERSION)
+    if tc.cc_path is None:
+        print("backend: no C compiler found")
+    else:
+        print("backend: %s" % tc.describe())
+    print("run polyglot doctor for details")
+
+
+# --------------------------------------------------------------------------
+# CLI
+# --------------------------------------------------------------------------
+
+def add_common_flags(p, link=False):
+    p.add_argument("--std", metavar="STD",
+                   help="language standard (c89..c2x / gnu*, c++98..c++23)")
+    p.add_argument("--warn", choices=["none", "default", "all", "extra",
+                                      "pedantic"], default="default",
+                   help="warning level (default: default)")
+    p.add_argument("--werror", action="store_true", help="warnings as errors")
+    p.add_argument("--debug", action="store_true", help="emit debug info (-g)")
+    p.add_argument("--sanitize", metavar="LIST",
+                   help="sanitizers: %s" % ",".join(SANITIZERS))
+    p.add_argument("-I", dest="includes", action="append", default=[],
+                   metavar="DIR", help="include search path (repeatable)")
+    p.add_argument("-D", dest="defines", action="append", default=[],
+                   metavar="NAME[=VAL]", help="preprocessor define (repeatable)")
+    p.add_argument("--cc-arg", dest="cc_args", action="append", default=[],
+                   metavar="ARG", help="raw flag passed to the compiler (repeatable)")
+    if link:
+        p.add_argument("-L", dest="lib_dirs", action="append", default=[],
+                       metavar="DIR", help="library search path (repeatable)")
+        p.add_argument("-l", dest="libs", action="append", default=[],
+                       metavar="NAME", help="link library (repeatable)")
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="polyglot", description="Universal Compiler Driver (v%s)" % VERSION,
+        epilog="run 'polyglot <command> --help' for per-command options")
+    parser.add_argument("--version", action="version",
+                        version="polyglot %s" % VERSION,
+                        help="show the version and exit")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="verbose output (full command lines, cache HIT/MISS)")
+    parser.add_argument("--quiet", action="store_true",
+                        help="suppress 'Running:' lines")
+    parser.add_argument("--target", help="target triple (clang cross or host on gcc)")
+    parser.add_argument("--opt-level",
+                        choices=list(OPT_MAP), default="default",
+                        help="optimization level (default: default)")
+    parser.add_argument("-o", "--output", help="output file")
+    parser.add_argument("--plugin", help="JSON-RPC plugin binary (name or "
+                        "path; used by 'build')")
+    parser.add_argument("--plugin-dir", default="~/.polyglot/plugins",
+                        help="plugin search directory (default: ~/.polyglot/plugins)")
+    parser.add_argument("--compiler", choices=["auto", "clang", "gcc"],
+                        default="auto",
+                        help="force a backend (default: auto-discover; "
+                             "env POLYGLOT_CC/POLYGLOT_CXX override)")
+
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("build", help="Build a source file or project")
+    p.add_argument("paths", nargs="*", help="source files or project directory")
+    p.add_argument("-o", "--output", default=argparse.SUPPRESS, help="output file")
+    add_common_flags(p, link=True)
+    p.add_argument("--shared", action="store_true", help="build a shared library")
+    p.add_argument("--static-lib", action="store_true",
+                   help="build a static library (ar rcs)")
+    p.add_argument("-j", "--jobs", type=int, default=1,
+                   help="parallel per-TU compilation")
+    p.add_argument("--no-cache", action="store_true",
+                   help="bypass the incremental object cache")
+
+    p = sub.add_parser("run",
+                       help="Build and run a source file (extra args after --)")
+    p.add_argument("file", help="source file to run")
+    add_common_flags(p, link=True)
+    p.add_argument("-j", "--jobs", type=int, default=1,
+                   help="parallel per-TU compilation")
+    p.add_argument("--no-cache", action="store_true",
+                   help="bypass the incremental object cache")
+    p.set_defaults(_pass_through=True)   # program args arrive via extras
+
+    p = sub.add_parser("check", help="Check syntax without building")
+    p.add_argument("paths", nargs="+", help="source files to check")
+    add_common_flags(p)
+
+    p = sub.add_parser("emit-ir", help="Emit LLVM IR (clang) or GIMPLE (gcc)")
+    p.add_argument("paths", nargs="+", help="source files")
+    p.add_argument("-o", "--output", default=argparse.SUPPRESS, help="output file")
+    add_common_flags(p)
+
+    p = sub.add_parser("emit-asm", help="Emit assembly")
+    p.add_argument("paths", nargs="+", help="source files")
+    p.add_argument("-o", "--output", default=argparse.SUPPRESS, help="output file")
+    p.add_argument("--intel", action="store_true", help="Intel syntax (-masm=intel)")
+    add_common_flags(p)
+
+    p = sub.add_parser("preproc", help="Run the preprocessor (-E)")
+    p.add_argument("file", help="source file")
+    p.add_argument("-o", "--output", default=argparse.SUPPRESS,
+                   help="write output to file instead of stdout")
+    p.add_argument("--no-lines", action="store_true",
+                   help="strip line markers (-P)")
+    add_common_flags(p)
+
+    p = sub.add_parser("deps", help="Emit Make-style dependencies (-MM)")
+    p.add_argument("file", help="source file")
+    p.add_argument("-o", "--output", default=argparse.SUPPRESS,
+                   help="write depfile here instead of stdout")
+    p.add_argument("--target-name", metavar="NAME", help="rename the target (-MT)")
+    add_common_flags(p)
+
+    p = sub.add_parser("doctor", help="Report on the toolchain environment")
+    p.add_argument("--strict", action="store_true",
+                   help="exit 1 when anything is missing")
+
+    sub.add_parser("targets", help="List known target triples and availability")
+
+    p = sub.add_parser("fmt", help="Format code with clang-format")
+    p.add_argument("paths", nargs="+", help="files to format")
+    p.add_argument("--style", default="llvm",
+                   choices=["llvm", "google", "chromium", "mozilla", "webkit",
+                            "microsoft", "file"], help="clang-format style")
+    p.add_argument("--check", action="store_true",
+                   help="exit 1 if any file would change")
+    p.add_argument("-i", dest="in_place", action="store_true",
+                   help="format files in place")
+    p.add_argument("--dump-config", action="store_true",
+                   help="print the style config and exit")
+
+    p = sub.add_parser("tidy", help="Lint with clang-tidy (extra args after --)")
+    p.add_argument("paths", nargs="*", help="files to lint")
+    p.add_argument("--checks", help="checks string, e.g. '-*,modernize-*'")
+    p.add_argument("--fix", action="store_true", help="apply suggested fixes")
+    p.set_defaults(extra=[])
+
+    p = sub.add_parser("repl", help="Interactive clang-repl (args after --)")
+    p.set_defaults(extra=[])
+
+    p = sub.add_parser("jit", help="Run a .ll/.bc with lli (args after --)")
+    p.add_argument("file", help="LLVM IR (.ll) or bitcode (.bc) file")
+    p.set_defaults(extra=[])
+
+    p = sub.add_parser("mca", help="Analyze machine code with llvm-mca")
+    p.add_argument("file", help=".c source or .s assembly")
+    p.add_argument("--iterations", type=int, default=3,
+                   help="analysis iterations (default: 3)")
+    p.add_argument("--mcpu", help="target CPU for the analysis")
+    add_common_flags(p)
+
+    p = sub.add_parser("analyze", help="clang static analyzer (--analyze)")
+    p.add_argument("paths", nargs="+", help="source files")
+
+    p = sub.add_parser("watch", help="Rebuild on file changes")
+    p.add_argument("file", help="source file to watch")
+    p.add_argument("--timeout", type=int, default=0,
+                   help="exit after N seconds (0 = watch forever)")
+    add_common_flags(p)
+
+    p = sub.add_parser("stats", help="Compilation statistics")
+    p.add_argument("paths", nargs="+", help="source files")
+    p.add_argument("--target", default=argparse.SUPPRESS, help="target triple")
+    p.add_argument("--opt-level", choices=list(OPT_MAP),
+                   default=argparse.SUPPRESS, help="optimization level")
+    p.add_argument("--json", action="store_true",
+                   help="machine-readable JSON output")
+    add_common_flags(p)
+
+    p = sub.add_parser("init", help="Initialize a new project")
+    p.add_argument("name", nargs="?", help="project name")
+    p.add_argument("--language", choices=["c", "cpp", "rust"],
+                   help="project language")
+
+    p = sub.add_parser("clean", help="Remove build artifacts and cache")
+    p.add_argument("path", nargs="?", default=".", help="project directory")
+
+    sub.add_parser("version", help="Show version and backend")
+
+    # Global-style flags also work after the subcommand (SUPPRESS defaults
+    # keep the global values intact; guards avoid redefining existing ones).
+    def _ensure(sub_p, *opts, **kw):
+        have = {o for a in sub_p._actions for o in getattr(a, "option_strings", [])}
+        if not any(o in have for o in opts):
+            sub_p.add_argument(*opts, **kw)
+
+    for sub_p in sub.choices.values():
+        _ensure(sub_p, "-v", "--verbose", action="store_true",
+                default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+        _ensure(sub_p, "--quiet", action="store_true",
+                default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+        _ensure(sub_p, "--compiler", choices=["auto", "clang", "gcc"],
+                default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+        _ensure(sub_p, "--target", default=argparse.SUPPRESS,
+                help=argparse.SUPPRESS)
+        _ensure(sub_p, "--opt-level", choices=list(OPT_MAP),
+                default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+        _ensure(sub_p, "--plugin", default=argparse.SUPPRESS,
+                help=argparse.SUPPRESS)
+        _ensure(sub_p, "--plugin-dir", default=argparse.SUPPRESS,
+                help=argparse.SUPPRESS)
+
+    return parser
+
+
+# program-argument pass-through commands: tokens after the first '--' belong
+# to the child program / tool, not to polyglot.
+PASS_THROUGH_CMDS = {"run", "tidy", "repl", "jit"}
+
+
+def _find_subcommand(argv):
+    """Index of the first token naming a known subcommand.
+
+    Matching against the known command names (instead of heuristically
+    skipping flags) keeps value-taking flags like `-I dir` or `--cc-arg x`
+    from being mistaken for the subcommand when they appear before it.
+    """
+    for i, tok in enumerate(argv):
+        if tok in HANDLERS:
+            return i
+    return None
+
+
+def _split_at_ddash(tokens):
+    if "--" in tokens:
+        i = tokens.index("--")
+        return tokens[:i], tokens[i + 1:]
+    return tokens, None
+
+
+HANDLERS = {
+    "build": cmd_build, "run": cmd_run, "check": cmd_check,
+    "emit-ir": cmd_emit_ir, "emit-asm": cmd_emit_asm, "preproc": cmd_preproc,
+    "deps": cmd_deps, "doctor": cmd_doctor, "targets": cmd_targets,
+    "fmt": cmd_fmt, "tidy": cmd_tidy, "repl": cmd_repl, "jit": cmd_jit,
+    "mca": cmd_mca, "analyze": cmd_analyze, "watch": cmd_watch,
+    "stats": cmd_stats, "init": cmd_init, "clean": cmd_clean,
+    "version": cmd_version,
+}
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+
+    extra_program_args = None
+    idx = _find_subcommand(argv)
+    if idx is not None and idx > 0:
+        # common flags typed before the subcommand are re-ordered after it so
+        # the subparser (which mirrors the global flags) actually sees them;
+        # otherwise parse_known_args drops them silently.
+        argv = [argv[idx]] + argv[:idx] + argv[idx + 1:]
+        idx = 0
+    if idx is not None and argv[idx] in PASS_THROUGH_CMDS:
+        head, tail = _split_at_ddash(argv)
+        argv = head
+        extra_program_args = tail
+
+    parser = build_parser()
+    args, unknown = parser.parse_known_args(argv)
+
+    if args.command in PASS_THROUGH_CMDS:
+        if extra_program_args is not None:
+            passthrough = extra_program_args
+        else:
+            passthrough = [u for u in unknown if u != "--"]
+            unknown = []
+        if args.command == "run":
+            args.args = passthrough
+        else:
+            args.extra = passthrough
+
+    if unknown:
+        err_print("error: unrecognized arguments: %s" % quote(unknown))
+        sys.exit(EXIT_USAGE)
+
+    try:
+        if args.command == "clean":
+            cmd_clean(None, args)
+        else:
+            tc = Toolchain(prefer=args.compiler,
+                           defer=(args.command == "build"),
+                           require=args.command not in ("doctor", "version"))
+            HANDLERS[args.command](tc, args)
+    except PolyglotError as exc:
+        err_print("error: %s" % exc)
+        sys.exit(exc.exit_code)
+    except KeyboardInterrupt:
+        print("\nInterrupted.")
+        sys.exit(130)
+    except SystemExit:
+        raise
+    except Exception as exc:  # never show a traceback to end users
+        err_print("unexpected error: %r" % exc)
+        if getattr(args, "verbose", False):
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+        sys.exit(EXIT_FAILURE)
 
 
 if __name__ == "__main__":

@@ -41,22 +41,40 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     pub fn error(code: &'static str, message: impl Into<String>) -> Self {
-        Self { severity: Severity::Error, code, message: message.into(), label: None, notes: Vec::new() }
+        Self {
+            severity: Severity::Error,
+            code,
+            message: message.into(),
+            label: None,
+            notes: Vec::new(),
+        }
     }
 
     pub fn warning(code: &'static str, message: impl Into<String>) -> Self {
-        Self { severity: Severity::Warning, code, message: message.into(), label: None, notes: Vec::new() }
+        Self {
+            severity: Severity::Warning,
+            code,
+            message: message.into(),
+            label: None,
+            notes: Vec::new(),
+        }
     }
 
     /// Attach a primary location to this diagnostic.
     pub fn at(mut self, span: Span, message: impl Into<String>) -> Self {
-        self.label = Some(Label { span, message: message.into() });
+        self.label = Some(Label {
+            span,
+            message: message.into(),
+        });
         self
     }
 
     /// Attach a secondary note with a location.
     pub fn note(mut self, span: Span, message: impl Into<String>) -> Self {
-        self.notes.push(Label { span, message: message.into() });
+        self.notes.push(Label {
+            span,
+            message: message.into(),
+        });
         self
     }
 }
@@ -112,15 +130,23 @@ impl DiagnosticEngine {
     }
 
     pub fn has_errors(&self) -> bool {
-        self.diagnostics.iter().any(|d| d.severity == Severity::Error)
+        self.diagnostics
+            .iter()
+            .any(|d| d.severity == Severity::Error)
     }
 
     pub fn error_count(&self) -> usize {
-        self.diagnostics.iter().filter(|d| d.severity == Severity::Error).count()
+        self.diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .count()
     }
 
     pub fn warning_count(&self) -> usize {
-        self.diagnostics.iter().filter(|d| d.severity == Severity::Warning).count()
+        self.diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Warning)
+            .count()
     }
 
     /// Render every diagnostic against `file` (which supplies source
@@ -148,7 +174,11 @@ impl DiagnosticEngine {
             ColorChoice::Never => false,
             ColorChoice::Auto => std::io::stderr().is_terminal(),
         };
-        let (c, b, r) = if use_color { (color(d.severity), BOLD, RESET) } else { ("", "", "") };
+        let (c, b, r) = if use_color {
+            (color(d.severity), BOLD, RESET)
+        } else {
+            ("", "", "")
+        };
 
         let (path, line_no) = file.resolve_line(d.label.as_ref().map(|l| l.span.line).unwrap_or(1));
         out.push_str(&format!(
@@ -167,12 +197,27 @@ impl DiagnosticEngine {
         ));
 
         if let Some(label) = &d.label {
-            draw_source_line(file, label.span.line, Some((label.span.col, label.span.len, c)), out);
+            draw_source_line(
+                file,
+                label.span.line,
+                Some((label.span.col, label.span.len, c)),
+                out,
+            );
         }
         for note in &d.notes {
             let (np, nl) = file.resolve_line(note.span.line);
-            out.push_str(&format!("  {b}note{r}: {} at {p}:{l}\n", note.message, p = np.display(), l = nl));
-            draw_source_line(file, note.span.line, Some((note.span.col, note.span.len, "")), out);
+            out.push_str(&format!(
+                "  {b}note{r}: {} at {p}:{l}\n",
+                note.message,
+                p = np.display(),
+                l = nl
+            ));
+            draw_source_line(
+                file,
+                note.span.line,
+                Some((note.span.col, note.span.len, "")),
+                out,
+            );
         }
         out.push('\n');
     }
@@ -185,12 +230,22 @@ fn draw_source_line(
     caret: Option<(u32, u32, &str)>,
     out: &mut String,
 ) {
-    let text = file.text.lines().nth(physical_line.saturating_sub(1) as usize).unwrap_or("");
+    let text = file
+        .text
+        .lines()
+        .nth(physical_line.saturating_sub(1) as usize)
+        .unwrap_or("");
     let gutter = physical_line.to_string();
     out.push_str(&format!("   {gutter} | {text}\n"));
     if let Some((col, len, color)) = caret {
         let pad = " ".repeat(col.saturating_sub(1) as usize);
         let carets = "^".repeat(len.max(1) as usize);
-        out.push_str(&format!("   {:width$} | {pad}{c}{carets}{r}\n", "", width = gutter.len(), c = color, r = RESET));
+        out.push_str(&format!(
+            "   {:width$} | {pad}{c}{carets}{r}\n",
+            "",
+            width = gutter.len(),
+            c = color,
+            r = RESET
+        ));
     }
 }

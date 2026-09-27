@@ -2,15 +2,9 @@ use polyglot_core::DiagnosticEngine;
 
 fn compile_unit(src: &str) -> polyglot_syntax::TranslationUnit {
     let mut diags = DiagnosticEngine::new();
-    let (_, unit) = polyglot_syntax::parse_source(
-        "test.c",
-        src,
-        &[],
-        &mut diags,
-    )
-    .expect("parse should not crash");
+    let (_, unit) = polyglot_syntax::parse_source("test.c", src, &[], &mut diags)
+        .expect("parse should not crash");
     if diags.has_errors() {
-        let mut out = String::new();
         // Rendering needs a SourceFile; rebuild minimal one.
         panic!("unexpected diagnostics: {}", diags.diagnostics().len());
     }
@@ -29,7 +23,11 @@ int main() {
 "#,
     );
     assert!(unit.funcs.iter().any(|f| f.name == "printf" && f.variadic));
-    let main = unit.funcs.iter().find(|f| f.name == "main").expect("main present");
+    let main = unit
+        .funcs
+        .iter()
+        .find(|f| f.name == "main")
+        .expect("main present");
     assert_eq!(main.params.len(), 0);
     assert_eq!(main.body.as_ref().unwrap().len(), 2);
 }

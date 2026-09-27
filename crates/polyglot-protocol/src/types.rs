@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
 use thiserror::Error;
-use uuid::Uuid;
 
 /// Protocol version
 pub const PROTOCOL_VERSION: &str = "0.1.0";
@@ -73,18 +71,13 @@ pub struct RpcError {
 }
 
 /// Request ID can be string, number, or null
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(untagged)]
 pub enum RequestId {
     String(String),
     Number(u64),
+    #[default]
     Null,
-}
-
-impl Default for RequestId {
-    fn default() -> Self {
-        RequestId::Null
-    }
 }
 
 impl From<u64> for RequestId {
@@ -198,21 +191,16 @@ fn default_true() -> bool {
 }
 
 /// Optimization level
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum OptLevel {
     None,
     Less,
+    #[default]
     Default,
     Aggressive,
     Size,
     SizeAggressive,
-}
-
-impl Default for OptLevel {
-    fn default() -> Self {
-        OptLevel::Default
-    }
 }
 
 /// Compile response
@@ -378,6 +366,10 @@ pub fn make_error(id: RequestId, code: i32, message: String, data: Option<Value>
     Response::Error(ErrorResponse {
         jsonrpc: "2.0".to_string(),
         id,
-        error: RpcError { code, message, data },
+        error: RpcError {
+            code,
+            message,
+            data,
+        },
     })
 }

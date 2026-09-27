@@ -100,21 +100,25 @@ fn const_fold(f: &mut Function, stats: &mut OptStats) -> bool {
         let mut i = 0usize;
         while i < block.instrs.len() {
             let foldable = match &block.instrs[i] {
-                Instr::Binop { op, lhs, rhs, ty, .. } => {
+                Instr::Binop {
+                    op, lhs, rhs, ty, ..
+                } => {
                     let (lv, rv) = (const_of(&block.instrs, *lhs), const_of(&block.instrs, *rhs));
                     match (lv, rv) {
                         (Some(l), Some(r)) => Some(fold_binop(*op, l, r, ty)),
                         _ => None,
                     }
                 }
-                Instr::Unop { op, operand, ty, .. } => {
-                    const_of(&block.instrs, *operand).map(|v| fold_unop(*op, v, ty))
-                }
+                Instr::Unop {
+                    op, operand, ty, ..
+                } => const_of(&block.instrs, *operand).map(|v| fold_unop(*op, v, ty)),
                 _ => None,
             };
             if let Some(value) = foldable {
                 let (dest, ty) = match &block.instrs[i] {
-                    Instr::Binop { dest, ty, .. } | Instr::Unop { dest, ty, .. } => (*dest, ty.clone()),
+                    Instr::Binop { dest, ty, .. } | Instr::Unop { dest, ty, .. } => {
+                        (*dest, ty.clone())
+                    }
                     _ => unreachable!(),
                 };
                 block.instrs[i] = Instr::Const { dest, value, ty };
@@ -126,7 +130,11 @@ fn const_fold(f: &mut Function, stats: &mut OptStats) -> bool {
         // Constant conditions become unconditional branches.
         if let Terminator::CondBr { cond, then, else_ } = block.term {
             if let Some(v) = const_of(&block.instrs, cond) {
-                block.term = if v != 0 { Terminator::Br(then) } else { Terminator::Br(else_) };
+                block.term = if v != 0 {
+                    Terminator::Br(then)
+                } else {
+                    Terminator::Br(else_)
+                };
                 stats.branches_folded += 1;
                 changed = true;
             }
@@ -152,7 +160,11 @@ fn fold_binop(op: BinOp, l: i128, r: i128, ty: &Type) -> i128 {
         _ => 64,
     };
     let signed = !matches!(ty, Type::Pointer(_));
-    let mask = if width_bits >= 128 { u128::MAX } else { (1u128 << width_bits) - 1 };
+    let mask = if width_bits >= 128 {
+        u128::MAX
+    } else {
+        (1u128 << width_bits) - 1
+    };
     let wrap = |v: i128| -> i128 {
         let uv = (v as u128) & mask;
         if signed && uv & (1u128 << (width_bits - 1)) != 0 {
@@ -250,7 +262,13 @@ fn simplify_block(block: &mut crate::Block, slot_addrof: &[bool], stats: &mut Op
         });
 
         match &mut block.instrs[i] {
-            Instr::Binop { dest, op, lhs, rhs, ty } => {
+            Instr::Binop {
+                dest,
+                op,
+                lhs,
+                rhs,
+                ty,
+            } => {
                 // Try identities first.
                 let simplified = simplify_binop(*op, *lhs, *rhs, ty);
                 if let Some((new_op, new_lhs, new_rhs)) = simplified {
@@ -265,7 +283,11 @@ fn simplify_block(block: &mut crate::Block, slot_addrof: &[bool], stats: &mut Op
                     let v = fold_binop(*op, *l, *r, ty);
                     let ty2 = ty.clone();
                     let d2 = *dest;
-                    block.instrs[i] = Instr::Const { dest: d2, value: v, ty: ty2 };
+                    block.instrs[i] = Instr::Const {
+                        dest: d2,
+                        value: v,
+                        ty: ty2,
+                    };
                     const_env.insert(d2, v);
                     stats.constants_folded += 1;
                     continue; // don't advance: reprocess folded instr
@@ -283,7 +305,11 @@ fn simplify_block(block: &mut crate::Block, slot_addrof: &[bool], stats: &mut Op
                     if let Some(v) = v {
                         let ty2 = ty.clone();
                         let d2 = *dest;
-                        block.instrs[i] = Instr::Const { dest: d2, value: v, ty: ty2 };
+                        block.instrs[i] = Instr::Const {
+                            dest: d2,
+                            value: v,
+                            ty: ty2,
+                        };
                         const_env.insert(d2, v);
                         continue;
                     }
@@ -292,12 +318,21 @@ fn simplify_block(block: &mut crate::Block, slot_addrof: &[bool], stats: &mut Op
                 copy_env.remove(dest);
                 last_store.retain(|_, vr| *vr != *dest);
             }
-            Instr::Unop { dest, op, operand, ty } => {
+            Instr::Unop {
+                dest,
+                op,
+                operand,
+                ty,
+            } => {
                 if let Some(v) = const_env.get(operand) {
                     let v = fold_unop(*op, *v, ty);
                     let ty2 = ty.clone();
                     let d2 = *dest;
-                    block.instrs[i] = Instr::Const { dest: d2, value: v, ty: ty2 };
+                    block.instrs[i] = Instr::Const {
+                        dest: d2,
+                        value: v,
+                        ty: ty2,
+                    };
                     const_env.insert(d2, v);
                     continue;
                 }
@@ -314,7 +349,11 @@ fn simplify_block(block: &mut crate::Block, slot_addrof: &[bool], stats: &mut Op
                     let v = fold_convert(v, to);
                     let t2 = to.clone();
                     let d2 = *dest;
-                    block.instrs[i] = Instr::Const { dest: d2, value: v, ty: t2 };
+                    block.instrs[i] = Instr::Const {
+                        dest: d2,
+                        value: v,
+                        ty: t2,
+                    };
                     const_env.insert(d2, v);
                     continue;
                 }
@@ -378,10 +417,8 @@ fn simplify_block(block: &mut crate::Block, slot_addrof: &[bool], stats: &mut Op
 fn simplify_binop(op: BinOp, lhs: Reg, rhs: Reg, ty: &Type) -> Option<(BinOp, Reg, Reg)> {
     // Identities requiring a constant on one side are handled by the
     // const_env path; here we handle structural identities.
-    let _ = (lhs, rhs, ty);
-    match op {
-        _ => None,
-    }
+    let _ = (op, lhs, rhs, ty);
+    None
 }
 
 fn fold_convert(v: i128, to: &Type) -> i128 {

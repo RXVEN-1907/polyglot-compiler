@@ -1,12 +1,12 @@
-use crate::types::{Request, Response, RequestId};
+use crate::types::{Request, RequestId, Response};
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
-use tokio::sync::{mpsc, oneshot, Mutex};
-use tracing::{debug, error, info, warn};
+use tokio::sync::{oneshot, Mutex};
+use tracing::{debug, error, warn};
 
 /// Transport for communicating with plugins via stdio
 pub struct StdioTransport {
@@ -136,14 +136,21 @@ impl StdioTransport {
         }
 
         let request = crate::types::make_request(id.clone(), method, params);
-        let request_json = serde_json::to_string(&request).context("Failed to serialize request")?;
+        let request_json =
+            serde_json::to_string(&request).context("Failed to serialize request")?;
 
         debug!("Sending: {}", request_json);
 
         {
             let mut stdin = self.stdin.lock().await;
-            stdin.write_all(request_json.as_bytes()).await.context("Failed to write request")?;
-            stdin.write_all(b"\n").await.context("Failed to write newline")?;
+            stdin
+                .write_all(request_json.as_bytes())
+                .await
+                .context("Failed to write request")?;
+            stdin
+                .write_all(b"\n")
+                .await
+                .context("Failed to write newline")?;
             stdin.flush().await.context("Failed to flush stdin")?;
         }
 
@@ -166,26 +173,41 @@ impl StdioTransport {
     /// Send a notification (no response expected)
     pub async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
         let notification = crate::types::make_notification(method, params);
-        let notification_json = serde_json::to_string(&notification).context("Failed to serialize notification")?;
+        let notification_json =
+            serde_json::to_string(&notification).context("Failed to serialize notification")?;
 
         debug!("Sending notification: {}", notification_json);
 
         let mut stdin = self.stdin.lock().await;
-        stdin.write_all(notification_json.as_bytes()).await.context("Failed to write notification")?;
-        stdin.write_all(b"\n").await.context("Failed to write newline")?;
+        stdin
+            .write_all(notification_json.as_bytes())
+            .await
+            .context("Failed to write notification")?;
+        stdin
+            .write_all(b"\n")
+            .await
+            .context("Failed to write newline")?;
         stdin.flush().await.context("Failed to flush stdin")?;
 
         Ok(())
     }
 
     /// Initialize the plugin
-    pub async fn initialize(&self, capabilities: crate::types::PluginCapabilities) -> Result<crate::types::InitializeResult> {
+    pub async fn initialize(
+        &self,
+        capabilities: crate::types::PluginCapabilities,
+    ) -> Result<crate::types::InitializeResult> {
         let params = crate::types::InitializeParams {
             protocol_version: crate::types::PROTOCOL_VERSION.to_string(),
             capabilities,
         };
 
-        let response = self.request(crate::types::methods::INITIALIZE, Some(serde_json::to_value(params)?)).await?;
+        let response = self
+            .request(
+                crate::types::methods::INITIALIZE,
+                Some(serde_json::to_value(params)?),
+            )
+            .await?;
 
         match response {
             Response::Success(r) => {
@@ -200,13 +222,21 @@ impl StdioTransport {
     }
 
     /// Compile a source file
-    pub async fn compile(&self, params: crate::types::CompileParams) -> Result<crate::types::CompileResult> {
-        let response = self.request(crate::types::methods::COMPILE, Some(serde_json::to_value(params)?)).await?;
+    pub async fn compile(
+        &self,
+        params: crate::types::CompileParams,
+    ) -> Result<crate::types::CompileResult> {
+        let response = self
+            .request(
+                crate::types::methods::COMPILE,
+                Some(serde_json::to_value(params)?),
+            )
+            .await?;
 
         match response {
             Response::Success(r) => {
-                let result: crate::types::CompileResult = serde_json::from_value(r.result)
-                    .context("Failed to parse compile result")?;
+                let result: crate::types::CompileResult =
+                    serde_json::from_value(r.result).context("Failed to parse compile result")?;
                 Ok(result)
             }
             Response::Error(e) => {
@@ -236,6 +266,12 @@ impl StdioTransport {
 pub struct ServerTransport {
     reader: BufReader<tokio::io::Stdin>,
     writer: tokio::io::Stdout,
+}
+
+impl Default for ServerTransport {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ServerTransport {
@@ -275,19 +311,36 @@ impl ServerTransport {
     pub async fn send_response(&mut self, response: Response) -> Result<()> {
         let json = serde_json::to_string(&response).context("Failed to serialize response")?;
         debug!("Sending response: {}", json);
-        self.writer.write_all(json.as_bytes()).await.context("Failed to write response")?;
-        self.writer.write_all(b"\n").await.context("Failed to write newline")?;
-        self.writer.flush().await.context("Failed to flush stdout")?;
+        self.writer
+            .write_all(json.as_bytes())
+            .await
+            .context("Failed to write response")?;
+        self.writer
+            .write_all(b"\n")
+            .await
+            .context("Failed to write newline")?;
+        self.writer
+            .flush()
+            .await
+            .context("Failed to flush stdout")?;
         Ok(())
     }
 
     /// Send a success response
     pub async fn send_success(&mut self, id: RequestId, result: Value) -> Result<()> {
-        self.send_response(crate::types::make_success(id, result)).await
+        self.send_response(crate::types::make_success(id, result))
+            .await
     }
 
     /// Send an error response
-    pub async fn send_error(&mut self, id: RequestId, code: i32, message: String, data: Option<Value>) -> Result<()> {
-        self.send_response(crate::types::make_error(id, code, message, data)).await
+    pub async fn send_error(
+        &mut self,
+        id: RequestId,
+        code: i32,
+        message: String,
+        data: Option<Value>,
+    ) -> Result<()> {
+        self.send_response(crate::types::make_error(id, code, message, data))
+            .await
     }
 }

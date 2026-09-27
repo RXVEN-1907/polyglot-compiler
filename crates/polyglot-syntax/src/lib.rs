@@ -2,7 +2,7 @@
 //!
 //! This crate turns source text into an AST:
 //!
-//! 1. [`preprocess`] runs the C preprocessor subset (comments,
+//! 1. [`preprocess`](fn@crate::preprocess) runs the C preprocessor subset (comments,
 //!    `#include`, object-like and function-like `#define`,
 //!    conditionals) and produces a single spliced text buffer plus a
 //!    line map so diagnostics point at the file the user wrote.

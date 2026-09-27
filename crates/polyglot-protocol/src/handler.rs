@@ -1,6 +1,6 @@
 use crate::types::{
-    CompileParams, CompileResult, InitializeParams, InitializeResult,
-    PluginCapabilities, PluginInfo, Request, RequestId, Response, ShutdownResult,
+    CompileParams, CompileResult, InitializeParams, InitializeResult, PluginCapabilities,
+    PluginInfo, Request, RequestId, Response, ShutdownResult,
 };
 use anyhow::Result;
 use serde_json::Value;
@@ -16,7 +16,7 @@ pub trait Plugin: Send + Sync {
     fn capabilities(&self) -> PluginCapabilities;
 
     /// Initialize the plugin
-    async fn initialize(&mut self, params: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&mut self, _params: InitializeParams) -> Result<InitializeResult> {
         Ok(InitializeResult {
             protocol_version: crate::types::PROTOCOL_VERSION.to_string(),
             capabilities: self.capabilities(),
@@ -33,10 +33,17 @@ pub trait Plugin: Send + Sync {
     }
 }
 
+/// Closure handling one RPC method; yields the response future.
+type MethodHandler = Box<
+    dyn Fn(Request) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response>> + Send>>
+        + Send
+        + Sync,
+>;
+
 /// Request handler for the plugin server
 pub struct PluginServer<P: Plugin> {
     plugin: P,
-    method_handlers: HashMap<String, Box<dyn Fn(Request) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response>> + Send>> + Send + Sync>>,
+    method_handlers: HashMap<String, MethodHandler>,
 }
 
 impl<P: Plugin> PluginServer<P> {
@@ -56,43 +63,52 @@ impl<P: Plugin> PluginServer<P> {
         // Initialize handler
         self.method_handlers.insert(
             methods::INITIALIZE.to_string(),
-            Box::new(|req| Box::pin(async move {
-                let params: InitializeParams = serde_json::from_value(req.params().unwrap_or(Value::Null))?;
-                // Note: We can't call plugin.initialize here because we don't have &mut self
-                // This will be handled by the server loop
-                Ok(crate::types::make_error(
-                    req.id().clone(),
-                    crate::types::error_codes::METHOD_NOT_FOUND,
-                    "Initialize must be handled by server".to_string(),
-                    None,
-                ))
-            })),
+            Box::new(|req| {
+                Box::pin(async move {
+                    // Deserialize (and thus validate) params; the value itself is
+                    // unused because initialize is deferred to the server loop.
+                    let _params: InitializeParams =
+                        serde_json::from_value(req.params().unwrap_or(Value::Null))?;
+                    // Note: We can't call plugin.initialize here because we don't have &mut self
+                    // This will be handled by the server loop
+                    Ok(crate::types::make_error(
+                        req.id().clone(),
+                        crate::types::error_codes::METHOD_NOT_FOUND,
+                        "Initialize must be handled by server".to_string(),
+                        None,
+                    ))
+                })
+            }),
         );
 
         // Compile handler
         self.method_handlers.insert(
             methods::COMPILE.to_string(),
-            Box::new(|req| Box::pin(async move {
-                Ok(crate::types::make_error(
-                    req.id().clone(),
-                    crate::types::error_codes::METHOD_NOT_FOUND,
-                    "Compile must be handled by server".to_string(),
-                    None,
-                ))
-            })),
+            Box::new(|req| {
+                Box::pin(async move {
+                    Ok(crate::types::make_error(
+                        req.id().clone(),
+                        crate::types::error_codes::METHOD_NOT_FOUND,
+                        "Compile must be handled by server".to_string(),
+                        None,
+                    ))
+                })
+            }),
         );
 
         // Shutdown handler
         self.method_handlers.insert(
             methods::SHUTDOWN.to_string(),
-            Box::new(|req| Box::pin(async move {
-                Ok(crate::types::make_error(
-                    req.id().clone(),
-                    crate::types::error_codes::METHOD_NOT_FOUND,
-                    "Shutdown must be handled by server".to_string(),
-                    None,
-                ))
-            })),
+            Box::new(|req| {
+                Box::pin(async move {
+                    Ok(crate::types::make_error(
+                        req.id().clone(),
+                        crate::types::error_codes::METHOD_NOT_FOUND,
+                        "Shutdown must be handled by server".to_string(),
+                        None,
+                    ))
+                })
+            }),
         );
     }
 
@@ -105,38 +121,58 @@ impl<P: Plugin> PluginServer<P> {
 
                 match method.as_str() {
                     crate::types::methods::INITIALIZE => {
-                        let params: InitializeParams = serde_json::from_value(call.params.unwrap_or(Value::Null))?;
+                        let params: InitializeParams =
+                            serde_json::from_value(call.params.unwrap_or(Value::Null))?;
                         match self.plugin.initialize(params).await {
                             Ok(result) => Ok(Response::Success(crate::types::SuccessResponse {
                                 jsonrpc: "2.0".to_string(),
                                 id,
                                 result: serde_json::to_value(result)?,
                             })),
-                            Err(e) => Ok(crate::types::make_error(id, crate::types::error_codes::INTERNAL_ERROR, e.to_string(), None)),
+                            Err(e) => Ok(crate::types::make_error(
+                                id,
+                                crate::types::error_codes::INTERNAL_ERROR,
+                                e.to_string(),
+                                None,
+                            )),
                         }
                     }
                     crate::types::methods::COMPILE => {
-                        let params: CompileParams = serde_json::from_value(call.params.unwrap_or(Value::Null))?;
+                        let params: CompileParams =
+                            serde_json::from_value(call.params.unwrap_or(Value::Null))?;
                         match self.plugin.compile(params).await {
                             Ok(result) => Ok(Response::Success(crate::types::SuccessResponse {
                                 jsonrpc: "2.0".to_string(),
                                 id,
                                 result: serde_json::to_value(result)?,
                             })),
-                            Err(e) => Ok(crate::types::make_error(id, crate::types::plugin_error_codes::COMPILATION_FAILED, e.to_string(), None)),
-                        }
-                    }
-                    crate::types::methods::SHUTDOWN => {
-                        match self.plugin.shutdown().await {
-                            Ok(result) => Ok(Response::Success(crate::types::SuccessResponse {
-                                jsonrpc: "2.0".to_string(),
+                            Err(e) => Ok(crate::types::make_error(
                                 id,
-                                result: serde_json::to_value(result)?,
-                            })),
-                            Err(e) => Ok(crate::types::make_error(id, crate::types::error_codes::INTERNAL_ERROR, e.to_string(), None)),
+                                crate::types::plugin_error_codes::COMPILATION_FAILED,
+                                e.to_string(),
+                                None,
+                            )),
                         }
                     }
-                    _ => Ok(crate::types::make_error(id, crate::types::error_codes::METHOD_NOT_FOUND, format!("Method not found: {}", method), None)),
+                    crate::types::methods::SHUTDOWN => match self.plugin.shutdown().await {
+                        Ok(result) => Ok(Response::Success(crate::types::SuccessResponse {
+                            jsonrpc: "2.0".to_string(),
+                            id,
+                            result: serde_json::to_value(result)?,
+                        })),
+                        Err(e) => Ok(crate::types::make_error(
+                            id,
+                            crate::types::error_codes::INTERNAL_ERROR,
+                            e.to_string(),
+                            None,
+                        )),
+                    },
+                    _ => Ok(crate::types::make_error(
+                        id,
+                        crate::types::error_codes::METHOD_NOT_FOUND,
+                        format!("Method not found: {}", method),
+                        None,
+                    )),
                 }
             }
             Request::Notification(notif) => {

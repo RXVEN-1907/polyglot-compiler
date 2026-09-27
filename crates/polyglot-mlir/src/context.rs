@@ -80,7 +80,10 @@ impl MlirContextWrapper {
                 anyhow::bail!("Failed to parse MLIR module");
             }
 
-            Ok(MlirModuleWrapper { module, context: self.context })
+            Ok(MlirModuleWrapper {
+                module,
+                context: self.context,
+            })
         }
     }
 
@@ -94,12 +97,19 @@ impl MlirContextWrapper {
                 anyhow::bail!("Failed to create MLIR module");
             }
 
-            Ok(MlirModuleWrapper { module, context: self.context })
+            Ok(MlirModuleWrapper {
+                module,
+                context: self.context,
+            })
         }
     }
 
     /// Run optimization pipeline on a module
-    pub fn optimize_module(&self, module: &MlirModuleWrapper, opt_level: crate::types::OptLevel) -> Result<()> {
+    pub fn optimize_module(
+        &self,
+        module: &MlirModuleWrapper,
+        opt_level: crate::types::OptLevel,
+    ) -> Result<()> {
         unsafe {
             let pass_manager = mlirPassManagerCreate(self.context);
             if pass_manager.ptr.is_null() {
@@ -175,9 +185,14 @@ impl MlirContextWrapper {
             let op = mlirModuleGetOperation(module.module);
             let mut result = String::new();
 
-            extern "C" fn string_callback(str_ref: MlirStringRef, user_data: *mut std::ffi::c_void) {
+            extern "C" fn string_callback(
+                str_ref: MlirStringRef,
+                user_data: *mut std::ffi::c_void,
+            ) {
                 let result = unsafe { &mut *(user_data as *mut String) };
-                let slice = unsafe { std::slice::from_raw_parts(str_ref.data as *const u8, str_ref.length) };
+                let slice = unsafe {
+                    std::slice::from_raw_parts(str_ref.data as *const u8, str_ref.length)
+                };
                 if let Ok(s) = std::str::from_utf8(slice) {
                     result.push_str(s);
                 }
@@ -236,7 +251,7 @@ impl MlirModuleWrapper {
             if str_ref.length == 0 {
                 Ok(String::new())
             } else {
-                let slice = unsafe { std::slice::from_raw_parts(str_ref.data as *const u8, str_ref.length) };
+                let slice = std::slice::from_raw_parts(str_ref.data as *const u8, str_ref.length);
                 Ok(std::str::from_utf8(slice).unwrap_or("").to_string())
             }
         }
@@ -247,7 +262,9 @@ impl MlirModuleWrapper {
         unsafe {
             let op = mlirModuleGetOperation(self.module);
             extern "C" fn dump_callback(str_ref: MlirStringRef, _user_data: *mut std::ffi::c_void) {
-                let slice = unsafe { std::slice::from_raw_parts(str_ref.data as *const u8, str_ref.length) };
+                let slice = unsafe {
+                    std::slice::from_raw_parts(str_ref.data as *const u8, str_ref.length)
+                };
                 if let Ok(s) = std::str::from_utf8(slice) {
                     eprint!("{}", s);
                 }
@@ -275,7 +292,11 @@ pub mod types {
     }
 
     /// Create a function type
-    pub fn function_type(context: MlirContext, inputs: &[MlirType], results: &[MlirType]) -> MlirType {
+    pub fn function_type(
+        context: MlirContext,
+        inputs: &[MlirType],
+        results: &[MlirType],
+    ) -> MlirType {
         unsafe {
             mlirFunctionTypeGet(
                 context,
@@ -288,7 +309,7 @@ pub mod types {
     }
 
     /// Create a pointer type (LLVM dialect)
-    pub fn pointer_type(context: MlirContext, pointee: MlirType) -> MlirType {
+    pub fn pointer_type(_context: MlirContext, pointee: MlirType) -> MlirType {
         unsafe { mlirLLVMPointerTypeGet(pointee, 0) }
     }
 }

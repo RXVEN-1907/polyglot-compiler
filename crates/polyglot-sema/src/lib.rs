@@ -57,8 +57,11 @@ struct FnCtx<'a> {
     globals: &'a HashMap<String, Type>,
 }
 
-pub fn check(mut unit: TranslationUnit, diags: &mut DiagnosticEngine) -> anyhow::Result<CheckedProgram> {
-// eprintln!("[sema] check: {} structs, {} funcs, {} globals", unit.structs.len(), unit.funcs.len(), unit.globals.len());
+pub fn check(
+    mut unit: TranslationUnit,
+    diags: &mut DiagnosticEngine,
+) -> anyhow::Result<CheckedProgram> {
+    // eprintln!("[sema] check: {} structs, {} funcs, {} globals", unit.structs.len(), unit.funcs.len(), unit.globals.len());
     // 1. Struct table.
     let mut structs: HashMap<String, StructDef> = HashMap::new();
     for def in unit.structs.drain(..) {
@@ -85,14 +88,20 @@ pub fn check(mut unit: TranslationUnit, diags: &mut DiagnosticEngine) -> anyhow:
             Some(prev) => {
                 if prev.defined && sig.defined {
                     diags.push(
-                        Diagnostic::error("E0302", format!("redefinition of function `{}`", f.name))
-                            .at(f.span, "second definition"),
+                        Diagnostic::error(
+                            "E0302",
+                            format!("redefinition of function `{}`", f.name),
+                        )
+                        .at(f.span, "second definition"),
                     );
                 }
                 if prev.ret != sig.ret || prev.params != sig.params {
                     diags.push(
-                        Diagnostic::warning("W0303", format!("conflicting declaration of `{}`", f.name))
-                            .at(f.span, "here"),
+                        Diagnostic::warning(
+                            "W0303",
+                            format!("conflicting declaration of `{}`", f.name),
+                        )
+                        .at(f.span, "here"),
                     );
                 }
                 if sig.defined {
@@ -118,7 +127,12 @@ pub fn check(mut unit: TranslationUnit, diags: &mut DiagnosticEngine) -> anyhow:
             continue;
         }
         global_types.insert(g.name.clone(), ty.clone());
-        global_infos.push(GlobalInfo { name: g.name.clone(), ty, init: g.init.clone(), span: g.span });
+        global_infos.push(GlobalInfo {
+            name: g.name.clone(),
+            ty,
+            init: g.init.clone(),
+            span: g.span,
+        });
     }
 
     // 4. Bodies.
@@ -137,7 +151,13 @@ pub fn check(mut unit: TranslationUnit, diags: &mut DiagnosticEngine) -> anyhow:
                 continue;
             }
             if param_scope
-                .insert(p.name.clone(), LocalSym { ty: p.ty.clone(), span: f.span })
+                .insert(
+                    p.name.clone(),
+                    LocalSym {
+                        ty: p.ty.clone(),
+                        span: f.span,
+                    },
+                )
                 .is_some()
             {
                 diags.push(
@@ -166,7 +186,10 @@ pub fn check(mut unit: TranslationUnit, diags: &mut DiagnosticEngine) -> anyhow:
                 ctx.diags.push(
                     Diagnostic::warning(
                         "W0307",
-                        format!("function `{}` can reach end of body without returning a value", f.name),
+                        format!(
+                            "function `{}` can reach end of body without returning a value",
+                            f.name
+                        ),
                     )
                     .at(f.span, "here"),
                 );
@@ -178,7 +201,12 @@ pub fn check(mut unit: TranslationUnit, diags: &mut DiagnosticEngine) -> anyhow:
         anyhow::bail!("type checking failed");
     }
 
-    Ok(CheckedProgram { unit, structs, funcs, globals: global_infos })
+    Ok(CheckedProgram {
+        unit,
+        structs,
+        funcs,
+        globals: global_infos,
+    })
 }
 
 /// Resolve a global's type, fixing array lengths from initializers.
@@ -191,7 +219,10 @@ fn resolve_global_type(
     if let Type::Array(elem, None) = &ty {
         let len = match &g.init {
             Some(Init::List(items)) => Some(items.len() as u64),
-            Some(Init::Expr(Expr { kind: ExprKind::StrLit(s), .. })) if **elem == Type::char_t() => {
+            Some(Init::Expr(Expr {
+                kind: ExprKind::StrLit(s),
+                ..
+            })) if **elem == Type::char_t() => {
                 Some(s.len() as u64 + 1) // NUL terminator
             }
             _ => None,
@@ -232,9 +263,12 @@ impl<'a> FnCtx<'a> {
         if let Some(prev) = scope.get(name) {
             let prev_span = prev.span;
             self.diags.push(
-                Diagnostic::error("E0310", format!("redeclaration of `{name}` in the same scope"))
-                    .at(span, "here")
-                    .note(prev_span, "previous declaration"),
+                Diagnostic::error(
+                    "E0310",
+                    format!("redeclaration of `{name}` in the same scope"),
+                )
+                .at(span, "here")
+                .note(prev_span, "previous declaration"),
             );
         } else {
             scope.insert(name.to_string(), LocalSym { ty, span });
@@ -263,14 +297,20 @@ impl<'a> FnCtx<'a> {
                 }
                 if matches!(stmt.kind, StmtKind::Continue) && self.loop_depth == 0 {
                     self.diags.push(
-                        Diagnostic::error("E0312", "`continue` outside of a loop").at(stmt.span, "here"),
+                        Diagnostic::error("E0312", "`continue` outside of a loop")
+                            .at(stmt.span, "here"),
                     );
                 }
             }
             StmtKind::Expr(e) => {
                 self.check_expr(e);
             }
-            StmtKind::Decl { ty, name, array_len, init } => {
+            StmtKind::Decl {
+                ty,
+                name,
+                array_len,
+                init,
+            } => {
                 // eprintln!("[sema] Decl {name} ty={ty:?}");
                 // Resolve the declared type.
                 let mut resolved = ty.clone();
@@ -278,11 +318,13 @@ impl<'a> FnCtx<'a> {
                     let len = match (array_len.as_ref(), init.as_ref()) {
                         (Some(e), _) => const_eval(e).map(|v| v as u64),
                         (None, Some(Init::List(items))) => Some(items.len() as u64),
-                        (None, Some(Init::Expr(Expr { kind: ExprKind::StrLit(s), .. })))
-                            if **elem == Type::char_t() =>
-                        {
-                            Some(s.len() as u64 + 1)
-                        }
+                        (
+                            None,
+                            Some(Init::Expr(Expr {
+                                kind: ExprKind::StrLit(s),
+                                ..
+                            })),
+                        ) if **elem == Type::char_t() => Some(s.len() as u64 + 1),
                         _ => None,
                     };
                     match len {
@@ -328,7 +370,12 @@ impl<'a> FnCtx<'a> {
                 self.check_expr(cond);
                 require_scalar(self, cond, "do-while condition");
             }
-            StmtKind::For { init, cond, step, body } => {
+            StmtKind::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
                 self.scopes.push(HashMap::new());
                 if let Some(init) = init {
                     self.check_stmt(init);
@@ -345,7 +392,10 @@ impl<'a> FnCtx<'a> {
                 self.loop_depth -= 1;
                 self.scopes.pop();
             }
-            StmtKind::Switch { scrutinee, sections } => {
+            StmtKind::Switch {
+                scrutinee,
+                sections,
+            } => {
                 self.check_expr(scrutinee);
                 if !scrutinee.ty.is_integer() {
                     self.diags.push(
@@ -402,36 +452,31 @@ impl<'a> FnCtx<'a> {
                 }
                 self.switch_depth -= 1;
             }
-            StmtKind::Return(value) => {
-                match value {
-                    Some(e) => {
-                        self.check_expr(e);
-                        if self.ret.is_void() {
-                            self.diags.push(
-                                Diagnostic::error(
-                                    "E0318",
-                                    format!("void function `{}` returns a value", self.name),
-                                )
-                                .at(e.span, "here"),
-                            );
-                        }
-                    }
-                    None => {
-                        if !self.ret.is_void() {
-                            self.diags.push(
-                                Diagnostic::warning(
-                                    "W0319",
-                                    format!(
-                                        "non-void function `{}` should return a value",
-                                        self.name
-                                    ),
-                                )
-                                .at(stmt.span, "here"),
-                            );
-                        }
+            StmtKind::Return(value) => match value {
+                Some(e) => {
+                    self.check_expr(e);
+                    if self.ret.is_void() {
+                        self.diags.push(
+                            Diagnostic::error(
+                                "E0318",
+                                format!("void function `{}` returns a value", self.name),
+                            )
+                            .at(e.span, "here"),
+                        );
                     }
                 }
-            }
+                None => {
+                    if !self.ret.is_void() {
+                        self.diags.push(
+                            Diagnostic::warning(
+                                "W0319",
+                                format!("non-void function `{}` should return a value", self.name),
+                            )
+                            .at(stmt.span, "here"),
+                        );
+                    }
+                }
+            },
             StmtKind::Block(stmts) => self.check_block(stmts),
         }
     }
@@ -472,7 +517,8 @@ impl<'a> FnCtx<'a> {
                 }
                 if let Type::Array(..) = ty {
                     self.diags.push(
-                        Diagnostic::error("E0321", "invalid initializer for array").at(e.span, "here"),
+                        Diagnostic::error("E0321", "invalid initializer for array")
+                            .at(e.span, "here"),
                     );
                 }
             }
@@ -491,14 +537,14 @@ impl<'a> FnCtx<'a> {
             (Init::List(items), Type::Struct(name)) => {
                 let Some(def) = self.structs.get(name) else {
                     self.diags.push(
-                        Diagnostic::error("E0309", format!("unknown struct `{name}`")).at(span, "here"),
+                        Diagnostic::error("E0309", format!("unknown struct `{name}`"))
+                            .at(span, "here"),
                     );
                     return;
                 };
                 if items.len() > def.fields.len() {
-                    self.diags.push(
-                        Diagnostic::error("E0322", "too many initializers").at(span, "here"),
-                    );
+                    self.diags
+                        .push(Diagnostic::error("E0322", "too many initializers").at(span, "here"));
                 }
                 for (item, field) in items.iter_mut().zip(&def.fields) {
                     self.check_init(item, &field.ty, span);
@@ -506,8 +552,11 @@ impl<'a> FnCtx<'a> {
             }
             (Init::List(_), other) => {
                 self.diags.push(
-                    Diagnostic::error("E0323", format!("braced initializer is invalid for `{other}`"))
-                        .at(span, "here"),
+                    Diagnostic::error(
+                        "E0323",
+                        format!("braced initializer is invalid for `{other}`"),
+                    )
+                    .at(span, "here"),
                 );
             }
         }
@@ -533,8 +582,11 @@ impl<'a> FnCtx<'a> {
                     expr.ty = Type::int(); // function name in value context
                 } else {
                     self.diags.push(
-                        Diagnostic::error("E0325", format!("use of undeclared identifier `{name}`"))
-                            .at(expr.span, "here"),
+                        Diagnostic::error(
+                            "E0325",
+                            format!("use of undeclared identifier `{name}`"),
+                        )
+                        .at(expr.span, "here"),
                     );
                     expr.ty = Type::int();
                 }
@@ -732,8 +784,11 @@ impl<'a> FnCtx<'a> {
                     UnOp::AddrOf => {
                         if !is_lvalue(&inner.kind) {
                             self.diags.push(
-                                Diagnostic::error("E0335", "cannot take the address of this expression")
-                                    .at(inner.span, "here"),
+                                Diagnostic::error(
+                                    "E0335",
+                                    "cannot take the address of this expression",
+                                )
+                                .at(inner.span, "here"),
                             );
                         }
                         expr.ty = Type::ptr_to(inner.ty.clone());
@@ -786,7 +841,10 @@ impl<'a> FnCtx<'a> {
                         self.diags.push(
                             Diagnostic::warning(
                                 "W0339",
-                                format!("assigning `{}` to `{}` discards the pointer", rhs.ty, lhs.ty),
+                                format!(
+                                    "assigning `{}` to `{}` discards the pointer",
+                                    rhs.ty, lhs.ty
+                                ),
                             )
                             .at(expr.span, "here"),
                         );
@@ -806,7 +864,11 @@ impl<'a> FnCtx<'a> {
                 } else if then.ty.is_integer() && els.ty.is_integer() {
                     usual_arith(&then.ty, &els.ty)
                 } else if then.ty.is_pointer() || els.ty.is_pointer() {
-                    then.ty.is_pointer().then(|| then.ty.clone()).unwrap_or_else(|| els.ty.clone())
+                    if then.ty.is_pointer() {
+                        then.ty.clone()
+                    } else {
+                        els.ty.clone()
+                    }
                 } else {
                     Type::int()
                 };
@@ -822,28 +884,30 @@ impl<'a> FnCtx<'a> {
                 }
                 if matches!(inner.ty, Type::Struct(_)) {
                     self.diags.push(
-                        Diagnostic::error("E0341", "cannot cast a struct value").at(inner.span, "here"),
+                        Diagnostic::error("E0341", "cannot cast a struct value")
+                            .at(inner.span, "here"),
                     );
                 }
                 expr.ty = ty.clone();
             }
             ExprKind::SizeofType(ty) => {
-                let size = self.type_size(ty, expr.span);
-                *expr = Expr::new(ExprKind::IntLit(size as i128, polyglot_syntax::lex::Suffix::Long), expr.span);
+                let size = self.type_size(ty);
+                *expr = Expr::new(
+                    ExprKind::IntLit(size as i128, polyglot_syntax::lex::Suffix::Long),
+                    expr.span,
+                );
                 // Note: replaced; ty set below by caller pattern? Set here.
                 expr.ty = Type::long();
-                return;
             }
             ExprKind::SizeofExpr(inner) => {
                 self.check_expr(inner);
                 // sizeof does NOT decay arrays: use the declared type.
-                let size = self.type_size(&inner.ty, inner.span);
+                let size = self.type_size(&inner.ty);
                 *expr = Expr::new(
                     ExprKind::IntLit(size as i128, polyglot_syntax::lex::Suffix::Long),
                     expr.span,
                 );
                 expr.ty = Type::long();
-                return;
             }
             ExprKind::Comma(lhs, rhs) => {
                 self.check_expr(lhs);
@@ -893,7 +957,8 @@ impl<'a> FnCtx<'a> {
             BinOp::Shl | BinOp::Shr => {
                 if !lt.is_integer() || !rt.is_integer() {
                     self.diags.push(
-                        Diagnostic::error("E0344", "shift operands must be integers").at(span, "here"),
+                        Diagnostic::error("E0344", "shift operands must be integers")
+                            .at(span, "here"),
                     );
                     return Type::int();
                 }
@@ -961,7 +1026,7 @@ impl<'a> FnCtx<'a> {
         }
     }
 
-    fn type_size(&self, ty: &Type, span: Span) -> u64 {
+    fn type_size(&self, ty: &Type) -> u64 {
         match ty {
             Type::Struct(name) => match self.structs.get(name) {
                 Some(def) => def.size,
@@ -970,7 +1035,7 @@ impl<'a> FnCtx<'a> {
                     0
                 }
             },
-            Type::Array(elem, len) => len.unwrap_or(0) * self.type_size(elem, span),
+            Type::Array(elem, len) => len.unwrap_or(0) * self.type_size(elem),
             other => other.size(),
         }
     }
@@ -981,8 +1046,11 @@ fn require_scalar(ctx: &mut FnCtx, expr: &Expr, what: &str) {
         // structs are not valid conditions
         if !expr.ty.is_scalar() {
             ctx.diags.push(
-                Diagnostic::error("E0347", format!("{what} must be a scalar, found `{}`", expr.ty))
-                    .at(expr.span, "here"),
+                Diagnostic::error(
+                    "E0347",
+                    format!("{what} must be a scalar, found `{}`", expr.ty),
+                )
+                .at(expr.span, "here"),
             );
         }
     }
@@ -1033,13 +1101,15 @@ fn compatible(want: &Type, got: &Type) -> bool {
     if want == got {
         return true;
     }
-    match (want, got) {
-        (Type::Int(_), Type::Int(_)) => true,
-        (Type::Pointer(_), Type::Pointer(_)) => true,
-        (Type::Pointer(_), Type::Int(_)) | (Type::Int(_), Type::Pointer(_)) => true,
-        (Type::Array(..), _) | (_, Type::Array(..)) => true,
-        _ => false,
-    }
+    matches!(
+        (want, got),
+        (Type::Int(_), Type::Int(_))
+            | (Type::Pointer(_), Type::Pointer(_))
+            | (Type::Pointer(_), Type::Int(_))
+            | (Type::Int(_), Type::Pointer(_))
+            | (Type::Array(..), _)
+            | (_, Type::Array(..))
+    )
 }
 
 fn op_str(op: UnOp) -> &'static str {

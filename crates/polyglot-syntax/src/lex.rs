@@ -59,10 +59,9 @@ impl fmt::Display for TokenKind {
 /// All punctuation recognized by the lexer, longest first so greedy
 /// matching picks multi-character operators.
 const PUNCTS: &[&str] = &[
-    "<<=", ">>=", "...", "->", "++", "--", "<<", ">>", "<=", ">=", "==", "!=", "&&", "||",
-    "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
-    "+", "-", "*", "/", "%", "=", "<", ">", "!", "~", "&", "|", "^", "?", ":", ";", ",",
-    ".", "(", ")", "{", "}", "[", "]",
+    "<<=", ">>=", "...", "->", "++", "--", "<<", ">>", "<=", ">=", "==", "!=", "&&", "||", "+=",
+    "-=", "*=", "/=", "%=", "&=", "|=", "^=", "+", "-", "*", "/", "%", "=", "<", ">", "!", "~",
+    "&", "|", "^", "?", ":", ";", ",", ".", "(", ")", "{", "}", "[", "]",
 ];
 
 /// Tokenize preprocessed text. `#@line` markers have already been
@@ -79,7 +78,10 @@ pub fn tokenize(text: &str) -> Vec<Token> {
         let start = lexer.point();
         lexer.skip_trivia();
         if lexer.at_end() {
-            tokens.push(Token { kind: TokenKind::Eof, span: Span::point(start.0, start.1) });
+            tokens.push(Token {
+                kind: TokenKind::Eof,
+                span: Span::point(start.0, start.1),
+            });
             break;
         }
         tokens.push(lexer.next_token(start));
@@ -153,7 +155,10 @@ impl Lexer {
 
     fn next_token(&mut self, start: (u32, u32)) -> Token {
         let c = self.bump();
-        let mk = |kind: TokenKind, slf: &Self| Token { kind, span: slf.span_from(start) };
+        let mk = |kind: TokenKind, slf: &Self| Token {
+            kind,
+            span: slf.span_from(start),
+        };
 
         if c.is_ascii_digit() {
             self.unbump();
@@ -229,9 +234,7 @@ impl Lexer {
                 text.push(self.bump());
             }
             2
-        } else if self.peek() == Some('0')
-            && self.peek2().is_some_and(|n| n.is_ascii_digit())
-        {
+        } else if self.peek() == Some('0') && self.peek2().is_some_and(|n| n.is_ascii_digit()) {
             self.bump(); // leading 0
             while self.peek().is_some_and(|n| n.is_ascii_digit()) {
                 text.push(self.bump());
@@ -243,10 +246,16 @@ impl Lexer {
             }
             10
         };
-        let value =
-            if text.is_empty() { 0 } else { i128::from_str_radix(&text, radix).unwrap_or(0) };
+        let value = if text.is_empty() {
+            0
+        } else {
+            i128::from_str_radix(&text, radix).unwrap_or(0)
+        };
         let suffix = self.read_suffix();
-        Token { kind: TokenKind::Int(value, suffix), span: self.span_from(start) }
+        Token {
+            kind: TokenKind::Int(value, suffix),
+            span: self.span_from(start),
+        }
     }
 
     fn read_suffix(&mut self) -> Suffix {
@@ -287,7 +296,10 @@ impl Lexer {
                 }
             }
         }
-        Token { kind: TokenKind::Str(String::from_utf8_lossy(&s).into_owned()), span: self.span_from(start) }
+        Token {
+            kind: TokenKind::Str(String::from_utf8_lossy(&s).into_owned()),
+            span: self.span_from(start),
+        }
     }
 
     fn char_literal(&mut self, start: (u32, u32)) -> Token {
@@ -311,7 +323,10 @@ impl Lexer {
             }
             self.bump();
         }
-        Token { kind: TokenKind::Char(byte), span: self.span_from(start) }
+        Token {
+            kind: TokenKind::Char(byte),
+            span: self.span_from(start),
+        }
     }
 
     fn escape(&mut self) -> u8 {

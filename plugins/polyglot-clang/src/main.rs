@@ -5,8 +5,8 @@ use polyglot_protocol::{
     handler::{Plugin, PluginServer},
     transport::ServerTransport,
     types::{
-        CompileParams, CompileResult, InitializeParams,
-        InitializeResult, PluginCapabilities, PluginInfo,
+        CompileParams, CompileResult, InitializeParams, InitializeResult, PluginCapabilities,
+        PluginInfo,
     },
 };
 use std::io::Write;
@@ -53,7 +53,21 @@ impl ClangPlugin {
     }
 
     fn find_clang(&self) -> Result<PathBuf> {
-        which::which("clang").context("clang not found in PATH")
+        // System PATH first; otherwise fall back to the clang shipped in
+        // the LLVM install this workspace was configured against
+        // (`MLIR_SYS_220_PREFIX`, see .cargo/config.toml).
+        if let Ok(c) = which::which("clang") {
+            return Ok(c);
+        }
+        let prefix = std::env::var_os("MLIR_SYS_220_PREFIX")
+            .or_else(|| option_env!("MLIR_SYS_220_PREFIX").map(std::ffi::OsString::from));
+        if let Some(prefix) = prefix {
+            let clang = PathBuf::from(prefix).join("bin").join("clang");
+            if clang.exists() {
+                return Ok(clang);
+            }
+        }
+        anyhow::bail!("clang not found in PATH or under MLIR_SYS_220_PREFIX/bin")
     }
 
     async fn compile_to_mlir(
@@ -62,24 +76,48 @@ impl ClangPlugin {
         args: &[String],
         target_triple: &str,
     ) -> Result<String> {
+        // `-emit-mlir` only exists in MLIR-enabled clang builds (e.g. the
+        // polyglot-llvm fork); stock clang rejects it. It is therefore
+        // opt-in via POLYGLOT_CLANG_EMIT_MLIR=1. The default emits plain
+        // LLVM IR text via `-S -emit-llvm`, which every clang supports.
+        if std::env::var_os("POLYGLOT_CLANG_EMIT_MLIR").is_some() {
+            return self
+                .emit(source_path, args, target_triple, &["-emit-mlir"], "MLIR")
+                .await;
+        }
+        warn!(
+            "stock clang has no -emit-mlir; emitting LLVM IR text via -S -emit-llvm \
+             (set POLYGLOT_CLANG_EMIT_MLIR=1 to require MLIR emission from an \
+             MLIR-enabled clang)"
+        );
+        self.emit(source_path, args, target_triple, &["-emit-llvm"], "LLVM IR")
+            .await
+    }
+
+    async fn emit(
+        &self,
+        source_path: &str,
+        args: &[String],
+        target_triple: &str,
+        emit_flag: &[&str],
+        what: &str,
+    ) -> Result<String> {
         let clang = self.find_clang()?;
 
-        // Create temporary file for MLIR output
-        let mlir_output = NamedTempFile::new()?;
-        let mlir_path = mlir_output.path().to_path_buf();
+        // Temporary file for the emitted text
+        let out_file = NamedTempFile::new()?;
+        let out_path = out_file.path().to_path_buf();
 
-        // Build clang command
         let mut cmd = Command::new(&clang);
-        cmd.arg("-emit-mlir")
-            .arg("-S")
+        for flag in emit_flag {
+            cmd.arg(flag);
+        }
+        cmd.arg("-S")
             .arg("-o")
-            .arg(&mlir_path)
-            .arg(source_path);
+            .arg(&out_path)
+            .arg(source_path)
+            .arg(format!("--target={}", target_triple));
 
-        // Add target triple
-        cmd.arg(format!("--target={}", target_triple));
-
-        // Add user args
         for arg in args {
             cmd.arg(arg);
         }
@@ -90,55 +128,14 @@ impl ClangPlugin {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            // Try without -emit-mlir as fallback
-            warn!("clang -emit-mlir failed, trying alternative: {}", stderr);
-            return self.compile_to_mlir_fallback(source_path, args, target_triple).await;
+            anyhow::bail!("clang {} emission failed: {}", what, stderr);
         }
 
-        // Read MLIR output
-        let mlir_text = tokio::fs::read_to_string(&mlir_path).await
-            .context("Failed to read MLIR output")?;
+        let text = tokio::fs::read_to_string(&out_path)
+            .await
+            .context("Failed to read clang output")?;
 
-        Ok(mlir_text)
-    }
-
-    async fn compile_to_mlir_fallback(
-        &self,
-        source_path: &str,
-        args: &[String],
-        target_triple: &str,
-    ) -> Result<String> {
-        let clang = self.find_clang()?;
-
-        // Try with -Xclang -emit-mlir
-        let mlir_output = NamedTempFile::new()?;
-        let mlir_path = mlir_output.path().to_path_buf();
-
-        let mut cmd = Command::new(&clang);
-        cmd.arg("-Xclang")
-            .arg("-emit-mlir")
-            .arg("-S")
-            .arg("-o")
-            .arg(&mlir_path)
-            .arg(source_path);
-
-        cmd.arg(format!("--target={}", target_triple));
-
-        for arg in args {
-            cmd.arg(arg);
-        }
-
-        let output = cmd.output().context("Failed to execute clang (fallback)")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("clang MLIR emission failed: {}", stderr);
-        }
-
-        let mlir_text = tokio::fs::read_to_string(&mlir_path).await
-            .context("Failed to read MLIR output")?;
-
-        Ok(mlir_text)
+        Ok(text)
     }
 }
 
@@ -195,8 +192,12 @@ impl Plugin for ClangPlugin {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging
-    tracing_subscriber::fmt::init();
+    // Initialize logging on stderr: stdout is the JSON-RPC stream, and any
+    // log line written there would corrupt the newline-delimited protocol.
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .init();
 
     let plugin = ClangPlugin::new();
     let mut server = PluginServer::new(plugin);

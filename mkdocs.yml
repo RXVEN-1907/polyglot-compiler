@@ -1,0 +1,97 @@
+site_name: Polyglot Compiler
+site_description: A universal compiler driver for C and C++ with real compiler inspection capabilities
+site_author: Polyglot Team
+site_url: https://RXVEN-1907.github.io/polyglot-compiler/
+repo_url: https://github.com/RXVEN-1907/polyglot-compiler
+repo_name: RXVEN-1907/polyglot-compiler
+edit_uri: edit/master/docs/
+
+theme:
+  name: material
+  language: en
+  palette:
+    - scheme: default
+      primary: deep purple
+      accent: purple
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: deep purple
+      accent: purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Quick Start: getting-started/quickstart.md
+      - Configuration: getting-started/configuration.md
+  - User Guide:
+      - Commands: user-guide/commands.md
+      - Tool Integrations: user-guide/tools.md
+      - Cache and Parallelism: user-guide/cache-and-parallelism.md
+      - Optimization: user-guide/optimization.md
+      - Cross Compilation: user-guide/cross-compilation.md
+      - Project Workflow: user-guide/project-workflow.md
+      - Examples: user-guide/examples.md
+  - Reference:
+      - CLI Reference: reference/cli.md
+      - Configuration: reference/configuration.md
+      - Target Triples: reference/targets.md
+  - Architecture:
+      - Overview: architecture/overview.md
+      - Python Driver: architecture/python-driver.md
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - admonition
+  - codehilite
+  - toc:
+      permalink: true
+  - footnotes
+  - attr_list
+  - md_in_html
+
+plugins:
+  - search
+  - git-revision-date-localized:
+      enable_creation_date: true
+  - minify:
+      minify_html: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/RXVEN-1907/polyglot-compiler
+    - icon: fontawesome/brands/discord
+      link: https://github.com/RXVEN-1907/polyglot-compiler/discussions
+  generator: false
+
+copyright: |
+  Copyright &copy; 2024 Polyglot Team - MIT License

@@ -1,5 +1,8 @@
 # Polyglot API Reference
 
+!!! note
+    This document predates the v0.2.0 driver rewrite. The maintained CLI reference lives in the mkdocs tree: `docs/reference/cli.md` (and `docs/user-guide/commands.md`). The global options below have since grown (`--quiet`, `--compiler {auto,clang,gcc}`, and per-command flags such as `build --sanitize/--shared/-j/--no-cache`, `fmt`, `tidy`, `watch`, `deps`, `preproc`).
+
 ## Python Driver CLI
 
 ### Global Options
@@ -11,7 +14,9 @@
 | `--opt-level LEVEL` | | Optimization level | `default` |
 | `--output FILE` | `-o` | Output file | Auto |
 | `--plugin PLUGIN` | | Plugin to use | - |
-| `--plugin-dir DIR` | | Plugin directory | `~/.polyglot/plugins` |
+| `--plugin-dir DIR` | | Plugin directory (legacy) | - |
+| `--compiler {auto,clang,gcc}` | | Force a backend | `auto` (env `POLYGLOT_CC`/`POLYGLOT_CXX` override) |
+| `--quiet` | | Suppress `Running:` lines | off |
 
 ### Optimization Levels
 
@@ -159,7 +164,7 @@ polyglot emit-ir [OPTIONS] PATHS...
 - `PATHS` - Source files (one or more)
 
 **Options:**
-- `-o, --output FILE` - Output file (default: stdout)
+- `-o, --output FILE` - Output file (default: `<source>.ll`; one file per command)
 - `--target TRIPLE` - Target triple
 
 **Examples:**
@@ -167,11 +172,11 @@ polyglot emit-ir [OPTIONS] PATHS...
 # Emit to file
 polyglot emit-ir hello.c -o hello.ll
 
-# Emit to stdout
+# Emit to the default file (hello.ll)
 polyglot emit-ir hello.c
 
-# Multiple files
-polyglot emit-ir main.c utils.c -o combined.ll
+# Multiple files (no -o: -o with multiple sources is an error)
+polyglot emit-ir main.c utils.c
 ```
 
 **Exit Codes:**
@@ -192,7 +197,7 @@ polyglot emit-asm [OPTIONS] PATHS...
 - `PATHS` - Source files (one or more)
 
 **Options:**
-- `-o, --output FILE` - Output file (default: stdout)
+- `-o, --output FILE` - Output file (default: `<source>.s`; one file per command)
 - `--target TRIPLE` - Target triple
 
 **Examples:**
@@ -200,11 +205,11 @@ polyglot emit-asm [OPTIONS] PATHS...
 # Emit to file
 polyglot emit-asm hello.c -o hello.s
 
-# Emit to stdout
+# Emit to the default file (hello.s)
 polyglot emit-asm hello.c
 
-# Intel syntax (via Clang)
-polyglot emit-asm hello.c -o hello.intel.s  # Note: requires Clang flag
+# Intel syntax
+polyglot emit-asm hello.c -o hello.intel.s --intel
 ```
 
 **Exit Codes:**
@@ -230,7 +235,9 @@ polyglot clean [PATH]
 - `*.ll` - LLVM IR files
 - `*.s` - Assembly files
 - `*.bc` - Bitcode files
-- Project executable (from `polyglot.toml`)
+- `.polyglot-cache/` contents
+
+The project executable named in `polyglot.toml` is left in place.
 
 **Examples:**
 ```bash
@@ -315,7 +322,7 @@ polyglot init my-app
 # C++ project
 polyglot init my-app --language cpp
 
-# Rust project (future)
+# Rust project (builds via rustc)
 polyglot init my-app --language rust
 ```
 
@@ -335,7 +342,7 @@ polyglot version
 
 **Output:**
 ```
-polyglot 0.1.0
+polyglot 0.2.0
 ```
 
 **Exit Codes:**
@@ -396,9 +403,9 @@ source = "src/main.c"
 | Variable | Description |
 |----------|-------------|
 | `PATH` | Must include Clang/LLVM bin directory |
-| `POLYGLOT_PLUGIN_DIR` | Override plugin directory |
-| `CC` | Override C compiler (default: `clang`) |
-| `CXX` | Override C++ compiler (default: `clang++`) |
+| `POLYGLOT_CC` | Absolute path or name of the C compiler (highest precedence) |
+| `POLYGLOT_CXX` | Absolute path or name of the C++ compiler (highest precedence) |
+| `NO_COLOR` | Disable colored output |
 
 ---
 
@@ -409,7 +416,7 @@ source = "src/main.c"
 | `0` | Success |
 | `1` | General error (compilation failed, file not found, etc.) |
 | `2` | Invalid command-line arguments |
-| `127` | Command not found (Clang missing) |
+| `3` | Missing tool or backend (e.g. clang not found, `analyze` without clang) |
 | `130` | Interrupted (Ctrl+C) |
 
 ---
@@ -616,4 +623,4 @@ jobs:
 
 ## Changelog
 
-See [CHANGELOG.md](../CHANGELOG.md) for version history.
+See [CHANGELOG.md](https://github.com/RXVEN-1907/polyglot-compiler/blob/master/CHANGELOG.md) for version history.

@@ -1,5 +1,8 @@
 # Polyglot Compiler Architecture
 
+!!! note
+    This document predates the v0.2.0 driver rewrite. The driver now auto-discovers GCC **or** clang (including clang installs off `PATH`), uses an incremental object cache (`.polyglot-cache/`), and ships 20 subcommands (including `doctor`, `fmt`, `tidy`, `analyze`, `mca`, `jit`, `repl`, `preproc`, `deps`, `watch`, `targets`, `stats --json`). The maintained documentation tree is under `docs/` (built with mkdocs) — start at `docs/index.md` or `docs/architecture/overview.md`. The backend description below is corrected where it claimed clang is required.
+
 ## Overview
 
 Polyglot is designed as a **modular, extensible compiler infrastructure** with a clear separation between the user-facing driver and the backend compilation pipeline.
@@ -31,7 +34,7 @@ Polyglot is designed as a **modular, extensible compiler infrastructure** with a
            ┌───────────────────────┼───────────────────────┐
            ▼                       ▼                       ▼
 ┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
-│   Clang (C)         │ │  Clang++ (C++)      │ │  Future Plugins     │
+│   GCC / g++         │ │  clang / clang++    │ │  Future Plugins     │
 │   -fsyntax-only     │ │  -fsyntax-only      │ │  (Rust, Swift,      │
 │  -S -emit-llvm      │ │  -S -emit-llvm      │ │   Zig, etc.)        │
 │  -O0 through -O3    │ │  -O0 through -O3    │ │                     │

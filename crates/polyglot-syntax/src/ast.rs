@@ -64,7 +64,10 @@ impl BinOp {
     }
 
     pub fn is_comparison(self) -> bool {
-        matches!(self, BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge)
+        matches!(
+            self,
+            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge
+        )
     }
 }
 
@@ -111,7 +114,11 @@ pub struct Expr {
 
 impl Expr {
     pub fn new(kind: ExprKind, span: Span) -> Self {
-        Self { kind, span, ty: Type::Void }
+        Self {
+            kind,
+            span,
+            ty: Type::Void,
+        }
     }
 }
 
@@ -144,13 +151,26 @@ pub enum ExprKind {
     IntLit(i128, crate::lex::Suffix),
     StrLit(String),
     Var(String),
-    Call { callee: String, args: Vec<Expr> },
+    Call {
+        callee: String,
+        args: Vec<Expr>,
+    },
     Index(Box<Expr>, Box<Expr>),
     /// Field access; `arrow` selects `.` vs `->`.
-    Member { base: Box<Expr>, name: String, arrow: bool },
+    Member {
+        base: Box<Expr>,
+        name: String,
+        arrow: bool,
+    },
     Unary(UnOp, Box<Expr>),
-    Postfix { op: IncDec, expr: Box<Expr> },
-    PrefixIncDec { op: IncDec, expr: Box<Expr> },
+    Postfix {
+        op: IncDec,
+        expr: Box<Expr>,
+    },
+    PrefixIncDec {
+        op: IncDec,
+        expr: Box<Expr>,
+    },
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Assign(AssignOp, Box<Expr>, Box<Expr>),
     Ternary(Box<Expr>, Box<Expr>, Box<Expr>),
@@ -171,7 +191,12 @@ pub struct Stmt {
 pub enum StmtKind {
     Expr(Expr),
     /// Declaration with optional initializer.
-    Decl { ty: Type, name: String, array_len: Option<Expr>, init: Option<Init> },
+    Decl {
+        ty: Type,
+        name: String,
+        array_len: Option<Expr>,
+        init: Option<Init>,
+    },
     If(Expr, Box<Stmt>, Option<Box<Stmt>>),
     While(Expr, Box<Stmt>),
     DoWhile(Box<Stmt>, Expr),
@@ -184,7 +209,10 @@ pub enum StmtKind {
     /// Sections preserve source order; each label is `None` for
     /// `default:` or an integer case expression. Fallthrough between
     /// sections is preserved by lowering.
-    Switch { scrutinee: Expr, sections: Vec<SwitchSection> },
+    Switch {
+        scrutinee: Expr,
+        sections: Vec<SwitchSection>,
+    },
     Break,
     Continue,
     Return(Option<Expr>),

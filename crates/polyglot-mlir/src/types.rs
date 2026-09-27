@@ -1,18 +1,13 @@
 //! MLIR-specific types
 
 /// Optimization level
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OptLevel {
     None,
     Less,
+    #[default]
     Default,
     Aggressive,
     Size,
     SizeAggressive,
-}
-
-impl Default for OptLevel {
-    fn default() -> Self {
-        OptLevel::Default
-    }
 }

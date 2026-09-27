@@ -1,14 +1,8 @@
-use crate::cli::Cli;
-use crate::simple_driver::run_simple_driver;
-use anyhow::Result;
 use clap::Parser;
-
-mod cli;
-mod simple_driver;
-mod types;
+use polyglot_driver::{cli::Cli, run_simple_driver};
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     run_simple_driver(cli)
 }

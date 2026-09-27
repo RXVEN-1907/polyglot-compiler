@@ -32,7 +32,11 @@ impl Span {
             return self;
         }
         let end = (other.col + other.len).max(self.col + 1);
-        Span { line: self.line, col: self.col, len: end.saturating_sub(self.col) }
+        Span {
+            line: self.line,
+            col: self.col,
+            len: end.saturating_sub(self.col),
+        }
     }
 }
 
@@ -45,7 +49,7 @@ impl fmt::Display for Span {
 /// An in-memory source file with its logical name.
 ///
 /// The preprocessor splices `#include "..."` files into a single token
-/// stream; [`line_directives`](SourceFile::line_directives) records
+/// stream; [`line_map`](SourceFile::line_map) records
 /// virtual line-number resets (`#line`) so diagnostics still point at
 /// the file the code was written in.
 #[derive(Clone, Debug)]
@@ -97,7 +101,10 @@ impl SourceFile {
             physical_line
         };
         (
-            self.files.get(file).map(|p| p.as_path()).unwrap_or(&self.name),
+            self.files
+                .get(file)
+                .map(|p| p.as_path())
+                .unwrap_or(&self.name),
             logical,
         )
     }

@@ -22,8 +22,11 @@ pub use lower::lower_program;
 pub use opt::{optimize_module, OptLevel, OptStats};
 
 use polyglot_core::{StructDef, Type};
-use polyglot_syntax::ast::BinOp;
 use std::collections::HashMap;
+
+/// Re-exported so downstream backends can match on operators without
+/// depending on the syntax crate.
+pub use polyglot_syntax::ast::BinOp;
 
 pub type Reg = u32;
 pub type SlotId = u32;
@@ -110,21 +113,53 @@ pub enum ArgKind {
 
 #[derive(Debug, Clone)]
 pub enum Instr {
-    Const { dest: Reg, value: i128, ty: Type },
+    Const {
+        dest: Reg,
+        value: i128,
+        ty: Type,
+    },
     /// Read a scalar local slot.
-    LoadLocal { dest: Reg, slot: SlotId },
+    LoadLocal {
+        dest: Reg,
+        slot: SlotId,
+    },
     /// Write a scalar local slot.
-    StoreLocal { slot: SlotId, src: Reg },
+    StoreLocal {
+        slot: SlotId,
+        src: Reg,
+    },
     /// Materialize the address of a local slot.
-    AddrLocal { dest: Reg, slot: SlotId },
+    AddrLocal {
+        dest: Reg,
+        slot: SlotId,
+    },
     /// Materialize the address of a global.
-    GetGlobal { dest: Reg, name: String },
-    LoadGlobal { dest: Reg, name: String },
-    StoreGlobal { name: String, src: Reg },
+    GetGlobal {
+        dest: Reg,
+        name: String,
+    },
+    LoadGlobal {
+        dest: Reg,
+        name: String,
+    },
+    StoreGlobal {
+        name: String,
+        src: Reg,
+    },
     /// Typed load from memory: `dest = *(addr + offset)` as `ty`.
-    Load { dest: Reg, addr: Reg, offset: i64, ty: Type },
+    Load {
+        dest: Reg,
+        addr: Reg,
+        offset: i64,
+        ty: Type,
+    },
     /// Typed store to memory: `*(addr + offset) = src`.
-    Store { addr: Reg, offset: i64, src: Reg, ty: Type },
+    Store {
+        addr: Reg,
+        offset: i64,
+        src: Reg,
+        ty: Type,
+    },
     Binop {
         dest: Reg,
         op: BinOp,
@@ -144,9 +179,17 @@ pub enum Instr {
         args: Vec<(Reg, ArgKind)>,
     },
     /// Register copy or integer conversion into `to`.
-    Convert { dest: Reg, src: Reg, to: Type },
+    Convert {
+        dest: Reg,
+        src: Reg,
+        to: Type,
+    },
     /// Block memory copy (struct assignment, large initializers).
-    Memcpy { dst: Reg, src: Reg, size: u64 },
+    Memcpy {
+        dst: Reg,
+        src: Reg,
+        size: u64,
+    },
 }
 
 /// Unary IR operations (subset of AST ops that survive lowering).
@@ -163,7 +206,11 @@ pub enum Terminator {
     Unreachable,
     Return(Option<Reg>),
     Br(BlockId),
-    CondBr { cond: Reg, then: BlockId, else_: BlockId },
+    CondBr {
+        cond: Reg,
+        then: BlockId,
+        else_: BlockId,
+    },
 }
 
 impl Function {
@@ -175,7 +222,12 @@ impl Function {
 
     pub fn new_slot(&mut self, name: &str, ty: Type, addrof: bool) -> SlotId {
         let size = slot_size(&ty);
-        self.slots.push(Slot { name: name.to_string(), ty, size, addrof });
+        self.slots.push(Slot {
+            name: name.to_string(),
+            ty,
+            size,
+            addrof,
+        });
         self.slots.len() as SlotId - 1
     }
 

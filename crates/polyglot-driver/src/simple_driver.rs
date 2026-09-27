@@ -1,32 +1,39 @@
 //! Simple driver that uses clang directly for the MVP
 //! This avoids the MLIR static linking issue while providing a working compiler
 
-use crate::cli::{BuildArgs, Cli, Commands, InitArgs, RunArgs};
-use crate::types::ProjectConfig;
+use crate::cli::{
+    BackendArg, BuildArgs, CheckArgs, Cli, Commands, EmitIrArgs, InitArgs, IrFormatArg, RunArgs,
+};
+use crate::pipeline;
 use anyhow::{Context, Result};
-use clap::Parser;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use target_lexicon::Triple;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 pub fn run_simple_driver(cli: Cli) -> Result<()> {
     // Setup logging
-    let level = if cli.verbose { Level::DEBUG } else { Level::INFO };
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(level)
-        .finish();
+    let level = if cli.verbose {
+        Level::DEBUG
+    } else {
+        Level::INFO
+    };
+    let subscriber = FmtSubscriber::builder().with_max_level(level).finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
     // Parse target triple
-    let target = cli.target_triple().context("Invalid target triple")?;
+    let target = cli
+        .target_triple()
+        .map_err(|e| anyhow::anyhow!("invalid target triple: {}", e))?;
 
     // Parse optimization level
     let opt_level: polyglot_protocol::types::OptLevel = cli.opt_level.into();
 
     // Execute command
-    match cli.command {
-        Commands::Build(args) => handle_build_simple(args, &cli, target, opt_level)?,
+    match cli.command.clone() {
+        Commands::Build(args) => handle_build(args, &cli)?,
+        Commands::Check(args) => handle_check(args, &cli)?,
+        Commands::EmitIr(args) => handle_emit_ir(args, &cli)?,
         Commands::Run(args) => handle_run_simple(args, &cli, target, opt_level)?,
         Commands::Init(args) => handle_init(args)?,
         Commands::Version => {
@@ -40,50 +47,165 @@ pub fn run_simple_driver(cli: Cli) -> Result<()> {
     Ok(())
 }
 
-fn handle_build_simple(
-    args: BuildArgs,
-    cli: &Cli,
-    target: Triple,
-    opt_level: polyglot_protocol::types::OptLevel,
-) -> Result<()> {
-    let path = args.path.unwrap_or_else(|| PathBuf::from("."));
+/// `polyglot build <src.c> -o out`: full in-process pipeline
+/// (parse -> check -> lower -> optimize). With the default `--backend
+/// ir` the artifact is textual Polyglot IR; with `--backend native` the
+/// optimized module is emitted to a real object file via `llc` and
+/// linked to an executable with the system `cc` (single source file
+/// only — multi-TU builds are not supported yet).
+fn handle_build(args: BuildArgs, cli: &Cli) -> Result<()> {
+    let source = args
+        .path
+        .ok_or_else(|| anyhow::anyhow!("build requires a source file (polyglot build <src.c>)"))?;
+    if !source.is_file() {
+        anyhow::bail!("no such source file: {}", source.display());
+    }
 
-    // Determine output path
-    let output = cli.output.clone().unwrap_or_else(|| {
-        if path.is_file() {
-            path.with_extension("")
-        } else {
-            PathBuf::from("a.out")
-        }
+    let output = cli.output.clone().unwrap_or_else(|| match args.backend {
+        BackendArg::Ir => source.with_extension("pgir"),
+        BackendArg::Native => default_native_output(&source),
     });
 
-    // Determine source file
-    let source_file = if path.is_file() {
-        path.clone()
-    } else if path.join("polyglot.toml").exists() {
-        // For project builds, find the first source file
-        let project_config = load_project_config(&path)?;
-        project_config.bins.first()
-            .map(|b| path.join(&b.source))
-            .unwrap_or_else(|| PathBuf::from("src/main.c"))
+    let compiled = pipeline::compile_to_ir(
+        &source,
+        &cli.include_dirs,
+        pipeline::map_opt_level(cli.opt_level),
+    )?;
+    pipeline::emit_warnings(&compiled.diags, &compiled.source);
+
+    let stats = &compiled.stats;
+    match args.backend {
+        BackendArg::Ir => {
+            std::fs::write(&output, &compiled.ir)
+                .with_context(|| format!("cannot write {}", output.display()))?;
+        }
+        BackendArg::Native => {
+            // Object code goes through a scratch directory; only the
+            // linked executable lands at the requested output.
+            let temp = tempfile::tempdir()
+                .context("cannot create a temporary directory for object code")?;
+            let obj_path = temp.path().join("polyglot.o");
+            let obj = polyglot_codegen::emit_object(
+                &compiled.module,
+                &obj_path,
+                &source.to_string_lossy(),
+            )
+            .with_context(|| format!("native code generation failed for {}", source.display()))?;
+            link_executable(&obj, &output)?;
+        }
+    }
+
+    println!(
+        "compiled {} -> {} ({} functions, {} globals, {} -> {} IR instructions, opt removed {})",
+        source.display(),
+        output.display(),
+        compiled.funcs,
+        compiled.globals,
+        stats.instrs_before,
+        stats.instrs_after,
+        stats.total_removed(),
+    );
+    Ok(())
+}
+
+/// Default executable path for a native build: the source without its
+/// extension (`01_hello.c` -> `01_hello`).
+fn default_native_output(source: &Path) -> PathBuf {
+    let stem = source.with_extension("");
+    if stem.as_os_str().is_empty() {
+        PathBuf::from("a.out")
     } else {
-        anyhow::bail!("No source file or project found at {:?}", path);
+        stem
+    }
+}
+
+/// Link one object file into an executable with the system linker
+/// driver (`cc`, falling back to `gcc`).
+fn link_executable(obj: &Path, output: &Path) -> Result<()> {
+    let cc = find_link_driver()
+        .ok_or_else(|| anyhow::anyhow!("no linker driver found (need 'cc' or 'gcc' on PATH)"))?;
+    let status = std::process::Command::new(&cc)
+        .arg(obj)
+        .arg("-o")
+        .arg(output)
+        .status()
+        .with_context(|| format!("cannot invoke linker {}", cc.display()))?;
+    if !status.success() {
+        anyhow::bail!("linking failed with exit code {:?}", status.code());
+    }
+    Ok(())
+}
+
+fn find_link_driver() -> Option<PathBuf> {
+    ["cc", "gcc"]
+        .iter()
+        .find_map(|name| which::which(name).ok())
+}
+
+/// `polyglot check <src.c>`: parse + semantic analysis only.
+/// Diagnostics go to stderr; exit code 1 on any error.
+fn handle_check(args: CheckArgs, cli: &Cli) -> Result<()> {
+    if !args.file.is_file() {
+        anyhow::bail!("no such source file: {}", args.file.display());
+    }
+    let (source, diags, nfuncs) = pipeline::check_only(&args.file, &cli.include_dirs)?;
+    pipeline::emit_warnings(&diags, &source);
+    println!("{}: ok ({} functions checked)", args.file.display(), nfuncs);
+    Ok(())
+}
+
+/// `polyglot emit-ir <src.c>`: same pipeline as build, but the textual
+/// IR (Polyglot by default, LLVM with --format llvm) goes to stdout by
+/// default, or to the file given with -o.
+fn handle_emit_ir(args: EmitIrArgs, cli: &Cli) -> Result<()> {
+    if !args.file.is_file() {
+        anyhow::bail!("no such source file: {}", args.file.display());
+    }
+
+    let compiled = pipeline::compile_to_ir(
+        &args.file,
+        &cli.include_dirs,
+        pipeline::map_opt_level(cli.opt_level),
+    )?;
+    pipeline::emit_warnings(&compiled.diags, &compiled.source);
+
+    let text = match args.format {
+        IrFormatArg::PgIr => compiled.ir,
+        IrFormatArg::Llvm => {
+            polyglot_codegen::emit_ll_named(&compiled.module, &args.file.to_string_lossy())?
+        }
     };
 
-    // Build using clang directly
-    build_with_clang(&source_file, &output, &target, opt_level, &args.args)?;
-
-    info!("Built {:?} -> {:?}", source_file, output);
+    if let Some(output) = &cli.output {
+        std::fs::write(output, &text)
+            .with_context(|| format!("cannot write {}", output.display()))?;
+        let stats = &compiled.stats;
+        eprintln!(
+            "wrote {} ({} functions, {} -> {} IR instructions, opt removed {})",
+            output.display(),
+            compiled.funcs,
+            stats.instrs_before,
+            stats.instrs_after,
+            stats.total_removed(),
+        );
+    } else {
+        print!("{}", text);
+    }
     Ok(())
 }
 
 fn handle_run_simple(
     args: RunArgs,
-    cli: &Cli,
+    _cli: &Cli,
     target: Triple,
     opt_level: polyglot_protocol::types::OptLevel,
 ) -> Result<()> {
     let source_file = args.file;
+
+    eprintln!(
+        "[polyglot] note: 'run' is a native-execution fallback that shells out to system clang; \
+         use 'polyglot build' for the in-process Polyglot IR pipeline"
+    );
 
     // Build to temporary executable
     let temp_dir = tempfile::tempdir()?;
@@ -107,7 +229,11 @@ fn build_with_clang(
     opt_level: polyglot_protocol::types::OptLevel,
     extra_args: &[String],
 ) -> Result<()> {
-    let clang = which::which("clang").context("clang not found in PATH")?;
+    let clang = find_clang();
+    let clang = match clang {
+        Some(c) => c,
+        None => anyhow::bail!("clang not found in PATH or under MLIR_SYS_220_PREFIX/bin"),
+    };
 
     let mut cmd = std::process::Command::new(clang);
     cmd.arg(source_file)
@@ -141,6 +267,24 @@ fn build_with_clang(
     Ok(())
 }
 
+/// Locate a clang to shell out to: system PATH first, then the clang
+/// shipped in the LLVM install this workspace was configured against
+/// (`MLIR_SYS_220_PREFIX` at runtime, or baked in at build time via
+/// `.cargo/config.toml`).
+fn find_clang() -> Option<PathBuf> {
+    if let Ok(c) = which::which("clang") {
+        return Some(c);
+    }
+    let prefix = std::env::var_os("MLIR_SYS_220_PREFIX")
+        .or_else(|| option_env!("MLIR_SYS_220_PREFIX").map(std::ffi::OsString::from))?;
+    let clang = PathBuf::from(prefix).join("bin").join("clang");
+    if clang.exists() {
+        Some(clang)
+    } else {
+        None
+    }
+}
+
 fn handle_init(args: InitArgs) -> Result<()> {
     let name = args.name.unwrap_or_else(|| "my-project".to_string());
     let language = args.language.unwrap_or_else(|| "c".to_string());
@@ -155,7 +299,8 @@ fn handle_init(args: InitArgs) -> Result<()> {
         _ => "clang",
     };
 
-    let config = format!(r#"[project]
+    let config = format!(
+        r#"[project]
 name = "{}"
 version = "0.1.0"
 
@@ -169,7 +314,13 @@ opt_level = 2
 [[bin]]
 name = "{}"
 source = "src/main.{}"
-"#, name, target_lexicon::HOST, plugin_name, name, if language == "cpp" { "cpp" } else { "c" });
+"#,
+        name,
+        target_lexicon::HOST,
+        plugin_name,
+        name,
+        if language == "cpp" { "cpp" } else { "c" }
+    );
 
     std::fs::write(project_dir.join("polyglot.toml"), config)?;
 
@@ -204,11 +355,4 @@ int main() {
     println!("Run 'polyglot build' to build.");
 
     Ok(())
-}
-
-fn load_project_config(path: &PathBuf) -> Result<ProjectConfig> {
-    let config_path = path.join("polyglot.toml");
-    let content = std::fs::read_to_string(config_path)?;
-    let config: ProjectConfig = toml::from_str(&content)?;
-    Ok(config)
 }

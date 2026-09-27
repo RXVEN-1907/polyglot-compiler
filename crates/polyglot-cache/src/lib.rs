@@ -1,10 +1,10 @@
 //! Polyglot Cache - Incremental compilation cache
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tokio::fs;
 
 /// Compilation cache entry
@@ -99,7 +99,7 @@ impl CompilationCache {
 
         // Remove oldest
         let to_remove = entries.len() - keep;
-        for (key, entry) in entries.drain(..to_remove) {
+        for (_, entry) in entries.drain(..to_remove) {
             // Remove object file
             let _ = fs::remove_file(&entry.object_path).await;
         }

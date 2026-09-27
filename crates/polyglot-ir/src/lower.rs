@@ -1,11 +1,13 @@
-//! Lowering from the checked AST ([`CheckedProgram`]) to Polyglot IR.
+//! Lowering from the checked AST ([`CheckedProgram`](polyglot_sema::CheckedProgram)) to Polyglot IR.
 //!
 //! Blocks are tracked by index (`cur`) rather than physical position;
 //! terminators immediately switch to a fresh dead block so statement
 //! lowering never appends to a finished block. Trailing dead blocks
-//! are pruned in [`FnLowerer::finish`].
+//! are pruned in `FnLowerer::finish`.
 
-use crate::{ArgKind, BlockId, Function, GlobalInit, GlobalVar, Instr, Module, Reg, SlotId, Terminator};
+use crate::{
+    ArgKind, BlockId, Function, GlobalInit, GlobalVar, Instr, Module, Reg, SlotId, Terminator,
+};
 use polyglot_core::{IntKind, StructDef, Type};
 use polyglot_sema::FuncSig;
 use polyglot_syntax::ast::*;
@@ -13,18 +15,28 @@ use std::collections::HashMap;
 
 /// Lower a fully checked program into IR.
 pub fn lower_program(program: polyglot_sema::CheckedProgram) -> Module {
-    let polyglot_sema::CheckedProgram { unit, structs, mut funcs, globals } = program;
+    let polyglot_sema::CheckedProgram {
+        unit,
+        structs,
+        mut funcs,
+        globals,
+    } = program;
 
-    let mut module = Module { structs, ..Module::default() };
+    let mut module = Module {
+        structs,
+        ..Module::default()
+    };
 
     // Ensure `memset` exists so aggregate initialization can zero-fill
     // without depending on user includes.
-    funcs.entry("memset".to_string()).or_insert_with(|| polyglot_sema::FuncSig {
-        ret: Type::void_ptr(),
-        params: vec![Type::void_ptr(), Type::int(), Type::long()],
-        variadic: false,
-        defined: false,
-    });
+    funcs
+        .entry("memset".to_string())
+        .or_insert_with(|| polyglot_sema::FuncSig {
+            ret: Type::void_ptr(),
+            params: vec![Type::void_ptr(), Type::int(), Type::long()],
+            variadic: false,
+            defined: false,
+        });
 
     // String literal pool (interned once per unique content).
     let mut strings: Vec<String> = Vec::new();
@@ -77,8 +89,14 @@ pub fn lower_program(program: polyglot_sema::CheckedProgram) -> Module {
                     continue;
                 }
                 let slot = lw.func.new_slot(&p.name, p.ty.clone(), false);
-                lw.emit(Instr::StoreLocal { slot, src: i as Reg });
-                lw.scopes.last_mut().unwrap().insert(p.name.clone(), Binding::Slot(slot));
+                lw.emit(Instr::StoreLocal {
+                    slot,
+                    src: i as Reg,
+                });
+                lw.scopes
+                    .last_mut()
+                    .unwrap()
+                    .insert(p.name.clone(), Binding::Slot(slot));
             }
             for stmt in body {
                 // Lowering only fails on sema invariants; surface them
@@ -113,7 +131,9 @@ fn lower_global_init(ty: &Type, init: Option<&Init>, strings: &mut Vec<String>) 
         Type::Array(elem, len) => len.unwrap_or(0) * elem.size(),
         other => other.size(),
     };
-    let Some(init) = init else { return GlobalInit::Zero };
+    let Some(init) = init else {
+        return GlobalInit::Zero;
+    };
     let mut bytes = vec![0u8; total.max(1) as usize];
     match (ty, init) {
         (Type::Array(elem, _), Init::List(items)) => {
@@ -150,14 +170,23 @@ fn write_const_elem(item: &Init, ty: &Type, out: &mut [u8], _strings: &mut Vec<S
         return;
     }
     let value = match item {
-        Init::Expr(Expr { kind: ExprKind::IntLit(v, _), .. }) => Some(*v),
+        Init::Expr(Expr {
+            kind: ExprKind::IntLit(v, _),
+            ..
+        }) => Some(*v),
         // Negative literals are folded by the parser, but accept them
         // here too for robustness.
-        Init::Expr(Expr { kind: ExprKind::Unary(UnOp::Neg, inner), .. }) => match &inner.kind {
+        Init::Expr(Expr {
+            kind: ExprKind::Unary(UnOp::Neg, inner),
+            ..
+        }) => match &inner.kind {
             ExprKind::IntLit(v, _) => Some(-*v),
             _ => None,
         },
-        Init::Expr(Expr { kind: ExprKind::StrLit(s), .. }) if *ty == Type::char_t() => {
+        Init::Expr(Expr {
+            kind: ExprKind::StrLit(s),
+            ..
+        }) if *ty == Type::char_t() => {
             let mut b = s.clone().into_bytes();
             b.push(0);
             let n = b.len().min(out.len());
@@ -232,7 +261,11 @@ impl<'a> FnLowerer<'a> {
     }
 
     fn cond_branch(&mut self, cond: Reg, then_b: BlockId, else_b: BlockId) {
-        self.terminate(Terminator::CondBr { cond, then: then_b, else_: else_b });
+        self.terminate(Terminator::CondBr {
+            cond,
+            then: then_b,
+            else_: else_b,
+        });
     }
 
     fn const_reg(&mut self, v: i128, ty: Type) -> Reg {
@@ -292,7 +325,10 @@ impl<'a> FnLowerer<'a> {
                     Ok((dest, self.func.slots[slot as usize].ty.clone()))
                 } else {
                     let dest = self.func.new_reg();
-                    self.emit(Instr::GetGlobal { dest, name: name.clone() });
+                    self.emit(Instr::GetGlobal {
+                        dest,
+                        name: name.clone(),
+                    });
                     Ok((dest, expr.ty.clone()))
                 }
             }
@@ -327,7 +363,12 @@ impl<'a> FnLowerer<'a> {
                     Type::Struct(n) => n.clone(),
                     _ => anyhow::bail!("member access on non-struct"),
                 };
-                let off = self.structs.get(&sname).and_then(|d| d.field(name)).map(|(o, _)| o).unwrap_or(0);
+                let off = self
+                    .structs
+                    .get(&sname)
+                    .and_then(|d| d.field(name))
+                    .map(|(o, _)| o)
+                    .unwrap_or(0);
                 let addr = self.offset_addr(base_addr, off as i128);
                 Ok((addr, expr.ty.clone()))
             }
@@ -370,7 +411,13 @@ impl<'a> FnLowerer<'a> {
         }
         let sc = self.const_reg(elem_size as i128, Type::long());
         let d = self.func.new_reg();
-        self.emit(Instr::Binop { dest: d, op: BinOp::Mul, lhs: idx, rhs: sc, ty: Type::long() });
+        self.emit(Instr::Binop {
+            dest: d,
+            op: BinOp::Mul,
+            lhs: idx,
+            rhs: sc,
+            ty: Type::long(),
+        });
         d
     }
 
@@ -401,9 +448,21 @@ impl<'a> FnLowerer<'a> {
                             Ok(dest)
                         }
                     }
+                } else if matches!(ty, Type::Array(..)) {
+                    // A global array used as a value decays to its
+                    // address (same rule as local aggregates).
+                    let dest = self.func.new_reg();
+                    self.emit(Instr::GetGlobal {
+                        dest,
+                        name: name.clone(),
+                    });
+                    Ok(dest)
                 } else {
                     let dest = self.func.new_reg();
-                    self.emit(Instr::LoadGlobal { dest, name: name.clone() });
+                    self.emit(Instr::LoadGlobal {
+                        dest,
+                        name: name.clone(),
+                    });
                     Ok(dest)
                 }
             }
@@ -414,7 +473,12 @@ impl<'a> FnLowerer<'a> {
                     Type::Array(..) | Type::Struct(_) => Ok(addr),
                     elem => {
                         let dest = self.func.new_reg();
-                        self.emit(Instr::Load { dest, addr, offset: 0, ty: elem });
+                        self.emit(Instr::Load {
+                            dest,
+                            addr,
+                            offset: 0,
+                            ty: elem,
+                        });
                         Ok(dest)
                     }
                 }
@@ -422,19 +486,34 @@ impl<'a> FnLowerer<'a> {
             ExprKind::Unary(UnOp::Neg, inner) => {
                 let r = self.lower_expr(inner)?;
                 let d = self.func.new_reg();
-                self.emit(Instr::Unop { dest: d, op: crate::UnOp::Neg, operand: r, ty });
+                self.emit(Instr::Unop {
+                    dest: d,
+                    op: crate::UnOp::Neg,
+                    operand: r,
+                    ty,
+                });
                 Ok(d)
             }
             ExprKind::Unary(UnOp::Not, inner) => {
                 let r = self.lower_expr(inner)?;
                 let d = self.func.new_reg();
-                self.emit(Instr::Unop { dest: d, op: crate::UnOp::Not, operand: r, ty: Type::int() });
+                self.emit(Instr::Unop {
+                    dest: d,
+                    op: crate::UnOp::Not,
+                    operand: r,
+                    ty: Type::int(),
+                });
                 Ok(d)
             }
             ExprKind::Unary(UnOp::BitNot, inner) => {
                 let r = self.lower_expr(inner)?;
                 let d = self.func.new_reg();
-                self.emit(Instr::Unop { dest: d, op: crate::UnOp::BitNot, operand: r, ty });
+                self.emit(Instr::Unop {
+                    dest: d,
+                    op: crate::UnOp::BitNot,
+                    operand: r,
+                    ty,
+                });
                 Ok(d)
             }
             ExprKind::Unary(UnOp::Deref, inner) => {
@@ -444,7 +523,12 @@ impl<'a> FnLowerer<'a> {
                         Type::Array(..) | Type::Struct(_) => Ok(r),
                         e => {
                             let dest = self.func.new_reg();
-                            self.emit(Instr::Load { dest, addr: r, offset: 0, ty: (*e).clone() });
+                            self.emit(Instr::Load {
+                                dest,
+                                addr: r,
+                                offset: 0,
+                                ty: (*e).clone(),
+                            });
                             Ok(dest)
                         }
                     },
@@ -490,12 +574,20 @@ impl<'a> FnLowerer<'a> {
                 self.place(then_b);
                 let tr = self.lower_expr(then)?;
                 let tr = self.convert(tr, then.ty.clone(), ty.clone());
-                self.emit(Instr::Convert { dest, src: tr, to: ty.clone() });
+                self.emit(Instr::Convert {
+                    dest,
+                    src: tr,
+                    to: ty.clone(),
+                });
                 self.jump_to(end_b);
                 self.place(else_b);
                 let er = self.lower_expr(els)?;
                 let er = self.convert(er, els.ty.clone(), ty.clone());
-                self.emit(Instr::Convert { dest, src: er, to: ty.clone() });
+                self.emit(Instr::Convert {
+                    dest,
+                    src: er,
+                    to: ty.clone(),
+                });
                 self.jump_to(end_b);
                 self.place(end_b);
                 Ok(dest)
@@ -532,8 +624,16 @@ impl<'a> FnLowerer<'a> {
             let ar = self.convert(ar, a.ty.clone(), target_ty.clone());
             arg_regs.push((ar, ArgKind::Direct(target_ty)));
         }
-        let dest = if ret.is_void() { None } else { Some(self.func.new_reg()) };
-        self.emit(Instr::Call { dest, func: callee.to_string(), args: arg_regs });
+        let dest = if ret.is_void() {
+            None
+        } else {
+            Some(self.func.new_reg())
+        };
+        self.emit(Instr::Call {
+            dest,
+            func: callee.to_string(),
+            args: arg_regs,
+        });
         Ok(dest.unwrap_or_else(|| self.const_reg(0, Type::int())))
     }
 
@@ -578,7 +678,10 @@ impl<'a> FnLowerer<'a> {
                     }
                 } else {
                     let dest = self.func.new_reg();
-                    self.emit(Instr::LoadGlobal { dest, name: name.clone() });
+                    self.emit(Instr::LoadGlobal {
+                        dest,
+                        name: name.clone(),
+                    });
                     Ok((dest, LvalueAddr::Global(name.clone())))
                 }
             }
@@ -588,7 +691,12 @@ impl<'a> FnLowerer<'a> {
                     Type::Array(..) | Type::Struct(_) => Ok((addr, LvalueAddr::Mem(addr, ty))),
                     elem_ty => {
                         let dest = self.func.new_reg();
-                        self.emit(Instr::Load { dest, addr, offset: 0, ty: elem_ty.clone() });
+                        self.emit(Instr::Load {
+                            dest,
+                            addr,
+                            offset: 0,
+                            ty: elem_ty.clone(),
+                        });
                         Ok((dest, LvalueAddr::Mem(addr, ty)))
                     }
                 }
@@ -600,9 +708,12 @@ impl<'a> FnLowerer<'a> {
         match loc {
             LvalueAddr::Local(slot) => self.emit(Instr::StoreLocal { slot, src: value }),
             LvalueAddr::Global(name) => self.emit(Instr::StoreGlobal { name, src: value }),
-            LvalueAddr::Mem(addr, ty) => {
-                self.emit(Instr::Store { addr, offset: 0, src: value, ty })
-            }
+            LvalueAddr::Mem(addr, ty) => self.emit(Instr::Store {
+                addr,
+                offset: 0,
+                src: value,
+                ty,
+            }),
         }
         Ok(())
     }
@@ -635,7 +746,11 @@ impl<'a> FnLowerer<'a> {
 
         // Assignment expression evaluates to the stored value.
         let out = self.func.new_reg();
-        self.emit(Instr::Convert { dest: out, src: stored, to: lhs_ty });
+        self.emit(Instr::Convert {
+            dest: out,
+            src: stored,
+            to: lhs_ty,
+        });
         Ok(out)
     }
 
@@ -653,12 +768,24 @@ impl<'a> FnLowerer<'a> {
             let l = self.convert(lr, lt, common.clone());
             let r = self.convert(rr, rt, common.clone());
             let d = self.func.new_reg();
-            self.emit(Instr::Binop { dest: d, op, lhs: l, rhs: r, ty: common });
+            self.emit(Instr::Binop {
+                dest: d,
+                op,
+                lhs: l,
+                rhs: r,
+                ty: common,
+            });
             return Ok((d, Type::int()));
         }
         if matches!(op, BinOp::Shl | BinOp::Shr) {
             let d = self.func.new_reg();
-            self.emit(Instr::Binop { dest: d, op, lhs: lr, rhs: rr, ty: lt.clone() });
+            self.emit(Instr::Binop {
+                dest: d,
+                op,
+                lhs: lr,
+                rhs: rr,
+                ty: lt.clone(),
+            });
             return Ok((d, lt));
         }
         if lt.is_pointer() || rt.is_pointer() {
@@ -693,7 +820,11 @@ impl<'a> FnLowerer<'a> {
                 };
                 return Ok((diff, Type::long()));
             }
-            let ptr_result_ty = if lt.is_pointer() { lt.clone() } else { rt.clone() };
+            let ptr_result_ty = if lt.is_pointer() {
+                lt.clone()
+            } else {
+                rt.clone()
+            };
             let (ptr, ptr_ty, int, int_ty) = if lt.is_pointer() {
                 (lr, lt.clone(), rr, rt)
             } else {
@@ -705,7 +836,11 @@ impl<'a> FnLowerer<'a> {
             let d = self.func.new_reg();
             self.emit(Instr::Binop {
                 dest: d,
-                op: if op == BinOp::Sub { BinOp::Sub } else { BinOp::Add },
+                op: if op == BinOp::Sub {
+                    BinOp::Sub
+                } else {
+                    BinOp::Add
+                },
                 lhs: ptr,
                 rhs: scaled,
                 ty: ptr_ty,
@@ -717,7 +852,13 @@ impl<'a> FnLowerer<'a> {
         let l = self.convert(lr, lt, common.clone());
         let r = self.convert(rr, rt, common.clone());
         let d = self.func.new_reg();
-        self.emit(Instr::Binop { dest: d, op, lhs: l, rhs: r, ty: common.clone() });
+        self.emit(Instr::Binop {
+            dest: d,
+            op,
+            lhs: l,
+            rhs: r,
+            ty: common.clone(),
+        });
         Ok((d, common))
     }
 
@@ -741,7 +882,11 @@ impl<'a> FnLowerer<'a> {
         }
         self.place(short_b);
         let sv = self.const_reg(if is_and { 0 } else { 1 }, Type::int());
-        self.emit(Instr::Convert { dest, src: sv, to: Type::int() });
+        self.emit(Instr::Convert {
+            dest,
+            src: sv,
+            to: Type::int(),
+        });
         self.jump_to(merge);
         self.place(rhs_b);
         let rr = self.lower_expr(rhs)?;
@@ -756,7 +901,11 @@ impl<'a> FnLowerer<'a> {
             rhs: z,
             ty: Type::long(),
         });
-        self.emit(Instr::Convert { dest, src: nz, to: Type::int() });
+        self.emit(Instr::Convert {
+            dest,
+            src: nz,
+            to: Type::int(),
+        });
         self.jump_to(merge);
         Ok(())
     }
@@ -851,7 +1000,12 @@ impl<'a> FnLowerer<'a> {
                 self.cond_branch(cr, body_b, end_b);
                 self.place(end_b);
             }
-            StmtKind::For { init, cond, step, body } => {
+            StmtKind::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
                 self.scopes.push(HashMap::new());
                 if let Some(init) = init {
                     self.lower_stmt(init)?;
@@ -861,10 +1015,7 @@ impl<'a> FnLowerer<'a> {
                 self.place(head);
                 let cond_val = match cond {
                     Some(c) => self.lower_expr(c)?,
-                    None => {
-                        let one = self.const_reg(1, Type::int());
-                        one
-                    }
+                    None => self.const_reg(1, Type::int()),
                 };
                 let body_b = self.new_block();
                 let step_b = self.new_block();
@@ -885,14 +1036,16 @@ impl<'a> FnLowerer<'a> {
                 self.place(end_b);
                 self.scopes.pop();
             }
-            StmtKind::Switch { scrutinee, sections } => {
+            StmtKind::Switch {
+                scrutinee,
+                sections,
+            } => {
                 let sr = self.lower_expr(scrutinee)?;
                 let sty = scrutinee.ty.clone();
                 let end_b = self.new_block();
                 self.breaks.push(end_b);
 
-                let body_blocks: Vec<BlockId> =
-                    sections.iter().map(|_| self.new_block()).collect();
+                let body_blocks: Vec<BlockId> = sections.iter().map(|_| self.new_block()).collect();
                 let mut default_target: Option<BlockId> = None;
 
                 // Dispatch chain lives in fresh blocks; the first check
@@ -958,20 +1111,18 @@ impl<'a> FnLowerer<'a> {
                     self.terminate(Terminator::Br(target));
                 }
             }
-            StmtKind::Return(value) => {
-                match value {
-                    Some(e) if !self.func.ret.is_void() => {
-                        let vr = self.lower_expr(e)?;
-                        let vr = self.convert(vr, e.ty.clone(), self.func.ret.clone());
-                        self.terminate(Terminator::Return(Some(vr)));
-                    }
-                    Some(e) => {
-                        let _ = self.lower_expr(e)?;
-                        self.terminate(Terminator::Return(None));
-                    }
-                    None => self.terminate(Terminator::Return(None)),
+            StmtKind::Return(value) => match value {
+                Some(e) if !self.func.ret.is_void() => {
+                    let vr = self.lower_expr(e)?;
+                    let vr = self.convert(vr, e.ty.clone(), self.func.ret.clone());
+                    self.terminate(Terminator::Return(Some(vr)));
                 }
-            }
+                Some(e) => {
+                    let _ = self.lower_expr(e)?;
+                    self.terminate(Terminator::Return(None));
+                }
+                None => self.terminate(Terminator::Return(None)),
+            },
             StmtKind::Block(stmts) => {
                 self.scopes.push(HashMap::new());
                 for s in stmts {
@@ -985,7 +1136,10 @@ impl<'a> FnLowerer<'a> {
 
     fn lower_decl(&mut self, ty: &Type, name: &str, init: Option<&Init>) -> anyhow::Result<()> {
         let slot = self.func.new_slot(name, ty.clone(), false);
-        self.scopes.last_mut().unwrap().insert(name.to_string(), Binding::Slot(slot));
+        self.scopes
+            .last_mut()
+            .unwrap()
+            .insert(name.to_string(), Binding::Slot(slot));
         let Some(init) = init else { return Ok(()) };
         match (init, ty) {
             (Init::Expr(expr), Type::Array(elem, len))
@@ -996,7 +1150,10 @@ impl<'a> FnLowerer<'a> {
                     let dst = self.slot_addr(slot);
                     let src = {
                         let d = self.func.new_reg();
-                        self.emit(Instr::GetGlobal { dest: d, name: label });
+                        self.emit(Instr::GetGlobal {
+                            dest: d,
+                            name: label,
+                        });
                         d
                     };
                     let n = len.unwrap_or(s.len() as u64 + 1);
@@ -1014,7 +1171,8 @@ impl<'a> FnLowerer<'a> {
                         if let Init::List(field_items) = item {
                             let elem_base = self.offset_addr(base, (i as u64 * esz) as i128);
                             if let Some(def) = self.structs.get(&sname) {
-                                for (field_item, field) in field_items.iter().zip(def.fields.iter()) {
+                                for (field_item, field) in field_items.iter().zip(def.fields.iter())
+                                {
                                     if let Init::Expr(e) = field_item {
                                         let vr = self.lower_expr(e)?;
                                         let vr = self.convert(vr, e.ty.clone(), field.ty.clone());
@@ -1056,10 +1214,16 @@ impl<'a> FnLowerer<'a> {
                                 let field_base = self.offset_addr(base, field.offset as i128);
                                 let nested_name = nested_name.clone();
                                 if let Some(nested_def) = self.structs.get(&nested_name) {
-                                    for (field_item, nested_field) in field_items.iter().zip(nested_def.fields.iter()) {
+                                    for (field_item, nested_field) in
+                                        field_items.iter().zip(nested_def.fields.iter())
+                                    {
                                         if let Init::Expr(e) = field_item {
                                             let vr = self.lower_expr(e)?;
-                                            let vr = self.convert(vr, e.ty.clone(), nested_field.ty.clone());
+                                            let vr = self.convert(
+                                                vr,
+                                                e.ty.clone(),
+                                                nested_field.ty.clone(),
+                                            );
                                             self.emit(Instr::Store {
                                                 addr: field_base,
                                                 offset: nested_field.offset as i64,

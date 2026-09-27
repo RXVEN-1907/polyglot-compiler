@@ -122,17 +122,30 @@ impl Parser {
 
     fn starts_base_type(&self) -> bool {
         match self.peek_kind() {
-            TokenKind::Ident(name) => matches!(
-                name.as_str(),
-                "char" | "short" | "int" | "long" | "unsigned" | "signed" | "void" | "struct" | "const"
-            ) || self.typedef_map.contains_key(name),
+            TokenKind::Ident(name) => {
+                matches!(
+                    name.as_str(),
+                    "char"
+                        | "short"
+                        | "int"
+                        | "long"
+                        | "unsigned"
+                        | "signed"
+                        | "void"
+                        | "struct"
+                        | "const"
+                ) || self.typedef_map.contains_key(name)
+            }
             _ => false,
         }
     }
 
     // ---- top level --------------------------------------------------------
 
-    pub fn parse_translation_unit(&mut self, diags: &mut DiagnosticEngine) -> anyhow::Result<TranslationUnit> {
+    pub fn parse_translation_unit(
+        &mut self,
+        diags: &mut DiagnosticEngine,
+    ) -> anyhow::Result<TranslationUnit> {
         let mut unit = TranslationUnit::default();
         while !matches!(self.peek_kind(), TokenKind::Eof) {
             if self.eat_punct(";") {
@@ -273,8 +286,20 @@ impl Parser {
             }
             // Parameter name is optional in prototypes: `int f(int);`
             let (name, _) = match self.peek_kind().clone() {
-                TokenKind::Ident(n) if !matches!(n.as_str(), "char"|"short"|"int"|"long"|"unsigned"|"signed"|"void"|"struct")
-                    && !self.at_punct("[") && !self.at_punct(",") && !self.at_punct(")") =>
+                TokenKind::Ident(n)
+                    if !matches!(
+                        n.as_str(),
+                        "char"
+                            | "short"
+                            | "int"
+                            | "long"
+                            | "unsigned"
+                            | "signed"
+                            | "void"
+                            | "struct"
+                    ) && !self.at_punct("[")
+                        && !self.at_punct(",")
+                        && !self.at_punct(")") =>
                 {
                     let sp = self.next().span;
                     (n, sp)
@@ -312,7 +337,11 @@ impl Parser {
     // ---- types -----------------------------------------------------------
 
     /// Parse a base type: specifiers plus optional `struct` definition.
-    fn parse_base_type(&mut self, unit: &mut TranslationUnit, diags: &mut DiagnosticEngine) -> Type {
+    fn parse_base_type(
+        &mut self,
+        unit: &mut TranslationUnit,
+        diags: &mut DiagnosticEngine,
+    ) -> Type {
         let mut has_long = false;
         let mut has_short = false;
         let mut has_int = false;
@@ -320,44 +349,41 @@ impl Parser {
         let mut is_void = false;
         let mut result: Option<Type> = None;
 
-        loop {
-            match self.peek_kind().clone() {
-                TokenKind::Ident(word) => match word.as_str() {
-                    "unsigned" | "signed" | "const" => {
-                        self.next();
-                    }
-                    "long" => {
-                        self.next();
-                        has_long = true;
-                    }
-                    "short" => {
-                        self.next();
-                        has_short = true;
-                    }
-                    "int" => {
-                        self.next();
-                        has_int = true;
-                    }
-                    "char" => {
-                        self.next();
-                        has_char = true;
-                    }
-                    "void" => {
-                        self.next();
-                        is_void = true;
-                    }
-                    "struct" => {
-                        self.next();
-                        result = Some(self.parse_struct_type(unit, diags));
-                    }
-                    _ => break,
-                },
+        while let TokenKind::Ident(word) = self.peek_kind().clone() {
+            match word.as_str() {
+                "unsigned" | "signed" | "const" => {
+                    self.next();
+                }
+                "long" => {
+                    self.next();
+                    has_long = true;
+                }
+                "short" => {
+                    self.next();
+                    has_short = true;
+                }
+                "int" => {
+                    self.next();
+                    has_int = true;
+                }
+                "char" => {
+                    self.next();
+                    has_char = true;
+                }
+                "void" => {
+                    self.next();
+                    is_void = true;
+                }
+                "struct" => {
+                    self.next();
+                    result = Some(self.parse_struct_type(unit, diags));
+                }
                 _ => break,
             }
         }
 
-        if result.is_some() {
-            return result.unwrap();
+        if let Some(ty) = result {
+            return ty;
         }
         if is_void {
             return Type::Void;
@@ -384,7 +410,11 @@ impl Parser {
     }
 
     /// Parse `Name { fields... }` (definition or use) after `struct`.
-    fn parse_struct_type(&mut self, unit: &mut TranslationUnit, diags: &mut DiagnosticEngine) -> Type {
+    fn parse_struct_type(
+        &mut self,
+        unit: &mut TranslationUnit,
+        diags: &mut DiagnosticEngine,
+    ) -> Type {
         let (name, _) = self.expect_ident(diags);
         // eprintln!("[parse] parsing struct {}", name);
         if self.at_punct("{") {
@@ -405,22 +435,37 @@ impl Parser {
                     }
                     // Array members.
                     if self.eat_punct("[") {
-                        let len_expr = if self.at_punct("]") { None } else { Some(self.parse_conditional(diags)) };
+                        let len_expr = if self.at_punct("]") {
+                            None
+                        } else {
+                            Some(self.parse_conditional(diags))
+                        };
                         self.expect_punct("]", diags);
                         if let Some(len) = len_expr.and_then(|e| const_array_len(&e)) {
                             fty = Type::Array(Box::new(fty), Some(len));
                         } else {
                             diags.push(
-                                Diagnostic::error("E0210", "array member requires a constant length").at(fspan, "here"),
+                                Diagnostic::error(
+                                    "E0210",
+                                    "array member requires a constant length",
+                                )
+                                .at(fspan, "here"),
                             );
                             fty = Type::Array(Box::new(fty), Some(0));
                         }
                     }
                     if !fname.is_empty() {
                         if fields.iter().any(|f| f.name == fname) {
-                            diags.push(Diagnostic::error("E0211", format!("duplicate field `{fname}`")).at(fspan, "here"));
+                            diags.push(
+                                Diagnostic::error("E0211", format!("duplicate field `{fname}`"))
+                                    .at(fspan, "here"),
+                            );
                         } else {
-                            fields.push(StructField { name: fname, ty: fty, offset: 0 });
+                            fields.push(StructField {
+                                name: fname,
+                                ty: fty,
+                                offset: 0,
+                            });
                         }
                     }
                     if !self.eat_punct(",") {
@@ -430,7 +475,12 @@ impl Parser {
                 self.expect_punct(";", diags);
             }
             self.expect_punct("}", diags);
-            let mut def = StructDef { name: name.clone(), fields, size: 0, align: 0 };
+            let mut def = StructDef {
+                name: name.clone(),
+                fields,
+                size: 0,
+                align: 0,
+            };
             // Build a temporary struct table from already-parsed structs for nested struct layout.
             let mut temp_table: HashMap<String, StructDef> = HashMap::new();
             for s in &unit.structs {
@@ -458,7 +508,11 @@ impl Parser {
         }
         // Optional array suffix in typedefs.
         if self.eat_punct("[") {
-            let len_expr = if self.at_punct("]") { None } else { Some(self.parse_conditional(diags)) };
+            let len_expr = if self.at_punct("]") {
+                None
+            } else {
+                Some(self.parse_conditional(diags))
+            };
             self.expect_punct("]", diags);
             if let Some(len) = len_expr.and_then(|e| const_array_len(&e)) {
                 ty = Type::Array(Box::new(ty), Some(len));
@@ -533,7 +587,10 @@ impl Parser {
                     self.next();
                     let body = Box::new(self.parse_stmt(diags));
                     if !matches!(self.peek_kind(), TokenKind::Ident(s) if s == "while") {
-                        diags.push(Diagnostic::error("E0204", "expected `while` after do-body").at(self.peek().span, "here"));
+                        diags.push(
+                            Diagnostic::error("E0204", "expected `while` after do-body")
+                                .at(self.peek().span, "here"),
+                        );
                     } else {
                         self.next();
                     }
@@ -550,10 +607,13 @@ impl Parser {
                         self.next();
                         None
                     } else if self.starts_base_type() {
-                        let mut decls = self.parse_declaration_stmts(diags);
+                        let decls = self.parse_declaration_stmts(diags);
                         // `for (int i = 0, j = 1; ...)` — wrap extras.
                         let first = if decls.is_empty() {
-                            Stmt { kind: StmtKind::Empty, span }
+                            Stmt {
+                                kind: StmtKind::Empty,
+                                span,
+                            }
                         } else {
                             let mut it = decls.into_iter();
                             let first = it.next().unwrap();
@@ -565,7 +625,13 @@ impl Parser {
                                 // as a block: rare and semantically scoped to
                                 // the loop, which matches C.
                                 return Stmt {
-                                    kind: StmtKind::Block(vec![first, Stmt { kind: StmtKind::Block(rest), span }]),
+                                    kind: StmtKind::Block(vec![
+                                        first,
+                                        Stmt {
+                                            kind: StmtKind::Block(rest),
+                                            span,
+                                        },
+                                    ]),
                                     span,
                                 };
                             }
@@ -575,14 +641,30 @@ impl Parser {
                     } else {
                         let e = self.parse_expression(diags);
                         self.expect_punct(";", diags);
-                        Some(Box::new(Stmt { kind: StmtKind::Expr(e), span }))
+                        Some(Box::new(Stmt {
+                            kind: StmtKind::Expr(e),
+                            span,
+                        }))
                     };
-                    let cond = if self.at_punct(";") { None } else { Some(self.parse_expression(diags)) };
+                    let cond = if self.at_punct(";") {
+                        None
+                    } else {
+                        Some(self.parse_expression(diags))
+                    };
                     self.expect_punct(";", diags);
-                    let step = if self.at_punct(")") { None } else { Some(self.parse_expression(diags)) };
+                    let step = if self.at_punct(")") {
+                        None
+                    } else {
+                        Some(self.parse_expression(diags))
+                    };
                     self.expect_punct(")", diags);
                     let body = Box::new(self.parse_stmt(diags));
-                    StmtKind::For { init, cond, step, body }
+                    StmtKind::For {
+                        init,
+                        cond,
+                        step,
+                        body,
+                    }
                 }
                 "break" => {
                     self.next();
@@ -596,7 +678,11 @@ impl Parser {
                 }
                 "return" => {
                     self.next();
-                    let value = if self.at_punct(";") { None } else { Some(self.parse_expression(diags)) };
+                    let value = if self.at_punct(";") {
+                        None
+                    } else {
+                        Some(self.parse_expression(diags))
+                    };
                     self.expect_punct(";", diags);
                     StmtKind::Return(value)
                 }
@@ -615,7 +701,8 @@ impl Parser {
                                 let value = self.parse_conditional(diags);
                                 self.expect_punct(":", diags);
                                 labels.push(Some(value));
-                            } else if matches!(self.peek_kind(), TokenKind::Ident(s) if s == "default") {
+                            } else if matches!(self.peek_kind(), TokenKind::Ident(s) if s == "default")
+                            {
                                 self.next();
                                 self.expect_punct(":", diags);
                                 labels.push(None);
@@ -638,7 +725,10 @@ impl Parser {
                         sections.push(SwitchSection { labels, stmts });
                     }
                     self.expect_punct("}", diags);
-                    StmtKind::Switch { scrutinee, sections }
+                    StmtKind::Switch {
+                        scrutinee,
+                        sections,
+                    }
                 }
                 _ => {
                     if self.starts_base_type() {
@@ -646,7 +736,10 @@ impl Parser {
                         if decls.len() == 1 {
                             return decls.pop().unwrap();
                         }
-                        return Stmt { kind: StmtKind::Block(decls), span };
+                        return Stmt {
+                            kind: StmtKind::Block(decls),
+                            span,
+                        };
                     }
                     let e = self.parse_expression(diags);
                     self.expect_punct(";", diags);
@@ -659,7 +752,10 @@ impl Parser {
                     if decls.len() == 1 {
                         return decls.pop().unwrap();
                     }
-                    return Stmt { kind: StmtKind::Block(decls), span };
+                    return Stmt {
+                        kind: StmtKind::Block(decls),
+                        span,
+                    };
                 }
                 let e = self.parse_expression(diags);
                 self.expect_punct(";", diags);
@@ -690,7 +786,11 @@ impl Parser {
             }
             let mut array_len: Option<Expr> = None;
             if self.eat_punct("[") {
-                let len_expr = if self.at_punct("]") { None } else { Some(self.parse_conditional(diags)) };
+                let len_expr = if self.at_punct("]") {
+                    None
+                } else {
+                    Some(self.parse_conditional(diags))
+                };
                 self.expect_punct("]", diags);
                 let len = len_expr.as_ref().and_then(const_array_len);
                 ty = Type::Array(Box::new(ty), len);
@@ -698,7 +798,12 @@ impl Parser {
             }
             let init = self.parse_initializer(diags);
             decls.push(Stmt {
-                kind: StmtKind::Decl { ty, name, array_len, init },
+                kind: StmtKind::Decl {
+                    ty,
+                    name,
+                    array_len,
+                    init,
+                },
                 span,
             });
             if !self.eat_punct(",") {
@@ -713,7 +818,11 @@ impl Parser {
     /// local declaration are recorded on `scratch` and merged into the
     /// enclosing unit by the caller through `parse_translation_unit`'s
     /// struct table (local structs are rare; we support named reuse).
-    fn parse_base_type_with(&mut self, unit: &mut TranslationUnit, diags: &mut DiagnosticEngine) -> Type {
+    fn parse_base_type_with(
+        &mut self,
+        unit: &mut TranslationUnit,
+        diags: &mut DiagnosticEngine,
+    ) -> Type {
         self.parse_base_type(unit, diags)
     }
 
@@ -768,18 +877,18 @@ impl Parser {
         self.expect_punct(":", diags);
         let els = self.parse_conditional(diags);
         let span = cond.span.merge(els.span);
-        Expr::new(ExprKind::Ternary(Box::new(cond), Box::new(then), Box::new(els)), span)
+        Expr::new(
+            ExprKind::Ternary(Box::new(cond), Box::new(then), Box::new(els)),
+            span,
+        )
     }
 
     fn parse_binary(&mut self, min_prec: u8, diags: &mut DiagnosticEngine) -> Expr {
         let mut lhs = self.parse_unary(diags);
-        loop {
-            let op = match self.peek_kind() {
-                TokenKind::Punct(p) => match punct_to_binop(p) {
-                    Some(op) => op,
-                    None => break,
-                },
-                _ => break,
+        while let TokenKind::Punct(p) = self.peek_kind() {
+            let op = match punct_to_binop(p) {
+                Some(op) => op,
+                None => break,
             };
             let prec = binop_prec(op);
             if prec < min_prec {
@@ -838,13 +947,25 @@ impl Parser {
                 self.next();
                 let e = self.parse_unary(diags);
                 let span = span.merge(e.span);
-                Expr::new(ExprKind::PrefixIncDec { op: IncDec::Inc, expr: Box::new(e) }, span)
+                Expr::new(
+                    ExprKind::PrefixIncDec {
+                        op: IncDec::Inc,
+                        expr: Box::new(e),
+                    },
+                    span,
+                )
             }
             TokenKind::Punct("--") => {
                 self.next();
                 let e = self.parse_unary(diags);
                 let span = span.merge(e.span);
-                Expr::new(ExprKind::PrefixIncDec { op: IncDec::Dec, expr: Box::new(e) }, span)
+                Expr::new(
+                    ExprKind::PrefixIncDec {
+                        op: IncDec::Dec,
+                        expr: Box::new(e),
+                    },
+                    span,
+                )
             }
             TokenKind::Ident(word) if word == "sizeof" => {
                 self.next();
@@ -935,23 +1056,49 @@ impl Parser {
                     self.next();
                     let (name, _) = self.expect_ident(diags);
                     let span = expr.span.merge(span);
-                    expr = Expr::new(ExprKind::Member { base: Box::new(expr), name, arrow: false }, span);
+                    expr = Expr::new(
+                        ExprKind::Member {
+                            base: Box::new(expr),
+                            name,
+                            arrow: false,
+                        },
+                        span,
+                    );
                 }
                 TokenKind::Punct("->") => {
                     self.next();
                     let (name, _) = self.expect_ident(diags);
                     let span = expr.span.merge(span);
-                    expr = Expr::new(ExprKind::Member { base: Box::new(expr), name, arrow: true }, span);
+                    expr = Expr::new(
+                        ExprKind::Member {
+                            base: Box::new(expr),
+                            name,
+                            arrow: true,
+                        },
+                        span,
+                    );
                 }
                 TokenKind::Punct("++") => {
                     self.next();
                     let span = expr.span.merge(span);
-                    expr = Expr::new(ExprKind::Postfix { op: IncDec::PostInc, expr: Box::new(expr) }, span);
+                    expr = Expr::new(
+                        ExprKind::Postfix {
+                            op: IncDec::PostInc,
+                            expr: Box::new(expr),
+                        },
+                        span,
+                    );
                 }
                 TokenKind::Punct("--") => {
                     self.next();
                     let span = expr.span.merge(span);
-                    expr = Expr::new(ExprKind::Postfix { op: IncDec::PostDec, expr: Box::new(expr) }, span);
+                    expr = Expr::new(
+                        ExprKind::Postfix {
+                            op: IncDec::PostDec,
+                            expr: Box::new(expr),
+                        },
+                        span,
+                    );
                 }
                 _ => break,
             }

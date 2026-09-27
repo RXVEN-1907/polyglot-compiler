@@ -73,7 +73,10 @@ impl StructDef {
     }
 
     pub fn field(&self, name: &str) -> Option<(u64, &Type)> {
-        self.fields.iter().find(|f| f.name == name).map(|f| (f.offset, &f.ty))
+        self.fields
+            .iter()
+            .find(|f| f.name == name)
+            .map(|f| (f.offset, &f.ty))
     }
 }
 

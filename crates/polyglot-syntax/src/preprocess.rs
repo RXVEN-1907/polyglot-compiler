@@ -139,7 +139,8 @@ impl<'d> Pp<'d> {
     }
 
     fn warn(&mut self, msg: impl Into<String>, physical: u32) {
-        self.diags.push(Diagnostic::warning("W0108", msg).at(Span::point(physical, 1), "directive"));
+        self.diags
+            .push(Diagnostic::warning("W0108", msg).at(Span::point(physical, 1), "directive"));
     }
 
     /// Process the raw text of one file. `file_idx` indexes `self.files`.
@@ -147,7 +148,10 @@ impl<'d> Pp<'d> {
         if self.include_stack.contains(&file_idx) {
             self.diags.push(Diagnostic::error(
                 "E0107",
-                format!("recursive #include of '{}' skipped", self.files[file_idx].display()),
+                format!(
+                    "recursive #include of '{}' skipped",
+                    self.files[file_idx].display()
+                ),
             ));
             return Ok(());
         }
@@ -223,7 +227,8 @@ impl<'d> Pp<'d> {
     fn emit_marker(&mut self, target_line: u32, file_idx: usize) {
         let marker = format!("#@line {target_line} {file_idx}");
         self.out_lines.push(marker);
-        self.line_map.push((self.out_lines.len() as u32, file_idx, target_line));
+        self.line_map
+            .push((self.out_lines.len() as u32, file_idx, target_line));
     }
 
     fn handle_directive(
@@ -266,12 +271,15 @@ impl<'d> Pp<'d> {
             self.push_frame(cond);
             return Ok(());
         }
-        if body.starts_with("if") {
+        if let Some(stripped) = body.strip_prefix("if") {
             // Constant expressions other than `#if 1` are unsupported.
-            let expr = body[2..].trim();
+            let expr = stripped.trim();
             let cond = self.active() && expr == "1";
             if !expr.is_empty() && expr != "1" && self.active() {
-                self.warn("#if with constant expressions is not supported; treating as false", physical);
+                self.warn(
+                    "#if with constant expressions is not supported; treating as false",
+                    physical,
+                );
             }
             self.push_frame(cond);
             return Ok(());
@@ -279,7 +287,11 @@ impl<'d> Pp<'d> {
         if body == "else" {
             if let Some(f) = self.frames.pop() {
                 let now = f.parent_active && !f.taken;
-                self.frames.push(Frame { parent_active: f.parent_active, taken: true, active: now });
+                self.frames.push(Frame {
+                    parent_active: f.parent_active,
+                    taken: true,
+                    active: now,
+                });
             }
             return Ok(());
         }
@@ -288,7 +300,10 @@ impl<'d> Pp<'d> {
             return Ok(());
         }
         if self.active() {
-            self.warn(format!("ignoring unsupported directive '#{}'", body), physical);
+            self.warn(
+                format!("ignoring unsupported directive '#{}'", body),
+                physical,
+            );
         }
         Ok(())
     }
@@ -324,7 +339,8 @@ impl<'d> Pp<'d> {
             return Ok(());
         }
         if self.active() {
-            self.diags.push(Diagnostic::error("E0104", "malformed #include"));
+            self.diags
+                .push(Diagnostic::error("E0104", "malformed #include"));
         }
         Ok(())
     }
@@ -345,8 +361,14 @@ impl<'d> Pp<'d> {
             None => {
                 let known: Vec<&str> = BUILTIN_HEADERS.iter().map(|(h, _)| *h).collect();
                 self.diags.push(
-                    Diagnostic::error("E0106", format!("unknown or unsupported system header <{header}>"))
-                        .note(Span::point(1, 1), format!("built-in headers: {}", known.join(", "))),
+                    Diagnostic::error(
+                        "E0106",
+                        format!("unknown or unsupported system header <{header}>"),
+                    )
+                    .note(
+                        Span::point(1, 1),
+                        format!("built-in headers: {}", known.join(", ")),
+                    ),
                 );
             }
         }
@@ -372,8 +394,10 @@ impl<'d> Pp<'d> {
                 return Ok(());
             }
         }
-        self.diags
-            .push(Diagnostic::error("E0105", format!("'#include \"{name}\"' not found")));
+        self.diags.push(Diagnostic::error(
+            "E0105",
+            format!("'#include \"{name}\"' not found"),
+        ));
         Ok(())
     }
 
@@ -387,7 +411,10 @@ impl<'d> Pp<'d> {
         let name = &def[..name_end];
         let after_name = &def[name_end..];
         let valid_name = !name.is_empty()
-            && name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
+            && name
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphabetic() || c == '_')
             && name.chars().all(|c| c.is_alphanumeric() || c == '_');
         if !valid_name {
             self.diags.push(
@@ -415,7 +442,10 @@ impl<'d> Pp<'d> {
                 .collect();
             self.macros.insert(
                 name.to_string(),
-                Macro::Function { params, body: after.trim().to_string() },
+                Macro::Function {
+                    params,
+                    body: after.trim().to_string(),
+                },
             );
         } else {
             let value = after_name.trim().to_string();

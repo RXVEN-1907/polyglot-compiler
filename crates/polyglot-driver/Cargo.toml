@@ -17,6 +17,11 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 target-lexicon = { workspace = true }
 polyglot-protocol = { path = "../polyglot-protocol" }
+polyglot-core = { workspace = true }
+polyglot-syntax = { workspace = true }
+polyglot-sema = { workspace = true }
+polyglot-ir = { workspace = true }
+polyglot-codegen = { path = "../polyglot-codegen" }
 tempfile = { workspace = true }
 which = "6.0"
 dirs = "5.0"

@@ -7,6 +7,8 @@ description = "Polyglot codegen - MLIR to Cranelift to machine code"
 
 [dependencies]
 anyhow = { workspace = true }
+polyglot-core = { workspace = true }
+polyglot-ir = { workspace = true }
 cranelift = { workspace = true }
 cranelift-codegen = { workspace = true }
 cranelift-module = { workspace = true }
@@ -18,3 +20,9 @@ target-lexicon = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 object = "0.38"
+
+[dev-dependencies]
+polyglot-syntax = { workspace = true }
+polyglot-sema = { workspace = true }
+polyglot-core = { workspace = true }
+polyglot-ir = { workspace = true }

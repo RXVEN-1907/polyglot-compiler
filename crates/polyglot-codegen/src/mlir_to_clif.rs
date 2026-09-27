@@ -3,8 +3,11 @@
 use anyhow::Result;
 
 /// MLIR to CLIF lowering context
+// Deliberately-stubbed MLIR lowering, kept for future work (see lib.rs docs).
+#[allow(dead_code)]
 pub struct LoweringContext;
 
+#[allow(dead_code)]
 impl LoweringContext {
     pub fn new() -> Self {
         Self

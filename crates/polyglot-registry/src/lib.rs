@@ -88,7 +88,9 @@ impl RegistryClient {
         // Extract tarball
         let tar = std::io::Cursor::new(bytes);
         let mut archive = tar::Archive::new(tar);
-        archive.unpack(dest_dir).context("Failed to extract plugin")?;
+        archive
+            .unpack(dest_dir)
+            .context("Failed to extract plugin")?;
 
         Ok(())
     }

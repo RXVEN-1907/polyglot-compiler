@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/polyglot-core",
+    "crates/polyglot-syntax",
+    "crates/polyglot-sema",
+    "crates/polyglot-ir",
     "crates/polyglot-protocol",
     "crates/polyglot-driver",
     "crates/polyglot-mlir",
@@ -19,6 +23,12 @@ authors = ["Polyglot Team"]
 [workspace.dependencies]
 # Core
 anyhow = "1.0"
+
+# Polyglot compiler pipeline (in-repo crates used via inheritance)
+polyglot-core = { path = "crates/polyglot-core", version = "0.1.0" }
+polyglot-syntax = { path = "crates/polyglot-syntax", version = "0.1.0" }
+polyglot-sema = { path = "crates/polyglot-sema", version = "0.1.0" }
+polyglot-ir = { path = "crates/polyglot-ir", version = "0.1.0" }
 thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

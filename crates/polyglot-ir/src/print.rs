@@ -23,8 +23,18 @@ pub fn print_module(module: &Module) -> String {
                     }
                 }
             };
-            let kind = if g.name.starts_with(".LC") { "const" } else { "global" };
-            let _ = writeln!(out, "{kind} @{name}: {ty} size={size} init={init}", name = g.name, ty = g.ty, size = g.size);
+            let kind = if g.name.starts_with(".LC") {
+                "const"
+            } else {
+                "global"
+            };
+            let _ = writeln!(
+                out,
+                "{kind} @{name}: {ty} size={size} init={init}",
+                name = g.name,
+                ty = g.ty,
+                size = g.size
+            );
         }
     }
     for f in &module.funcs {
@@ -121,9 +131,18 @@ fn render_instr(instr: &Instr) -> String {
         Instr::StoreGlobal { name, src } => {
             format!("store.global @{name}, {}", reg(*src))
         }
-        Instr::Load { dest, addr, offset, ty } => {
+        Instr::Load {
+            dest,
+            addr,
+            offset,
+            ty,
+        } => {
             if *offset == 0 {
-                format!("{dest} = load.{ty} [{addr}]", dest = reg(*dest), addr = reg(*addr))
+                format!(
+                    "{dest} = load.{ty} [{addr}]",
+                    dest = reg(*dest),
+                    addr = reg(*addr)
+                )
             } else {
                 format!(
                     "{dest} = load.{ty} [{addr}+{offset}]",
@@ -132,9 +151,18 @@ fn render_instr(instr: &Instr) -> String {
                 )
             }
         }
-        Instr::Store { addr, offset, src, ty } => {
+        Instr::Store {
+            addr,
+            offset,
+            src,
+            ty,
+        } => {
             if *offset == 0 {
-                format!("store.{ty} [{addr}], {src}", addr = reg(*addr), src = reg(*src))
+                format!(
+                    "store.{ty} [{addr}], {src}",
+                    addr = reg(*addr),
+                    src = reg(*src)
+                )
             } else {
                 format!(
                     "store.{ty} [{addr}+{offset}], {src}",
@@ -143,7 +171,13 @@ fn render_instr(instr: &Instr) -> String {
                 )
             }
         }
-        Instr::Binop { dest, op, lhs, rhs, ty } => {
+        Instr::Binop {
+            dest,
+            op,
+            lhs,
+            rhs,
+            ty,
+        } => {
             format!(
                 "{dest} = {op}.{ty} {lhs}, {rhs}",
                 dest = reg(*dest),
@@ -152,13 +186,22 @@ fn render_instr(instr: &Instr) -> String {
                 rhs = reg(*rhs)
             )
         }
-        Instr::Unop { dest, op, operand, ty } => {
+        Instr::Unop {
+            dest,
+            op,
+            operand,
+            ty,
+        } => {
             let name = match op {
                 crate::UnOp::Neg => "neg",
                 crate::UnOp::Not => "lnot",
                 crate::UnOp::BitNot => "bnot",
             };
-            format!("{dest} = {name}.{ty} {operand}", dest = reg(*dest), operand = reg(*operand))
+            format!(
+                "{dest} = {name}.{ty} {operand}",
+                dest = reg(*dest),
+                operand = reg(*operand)
+            )
         }
         Instr::Call { dest, func, args } => {
             let a = args
@@ -175,7 +218,11 @@ fn render_instr(instr: &Instr) -> String {
             format!("{} = convert {}, {}", reg(*dest), reg(*src), to)
         }
         Instr::Memcpy { dst, src, size } => {
-            format!("memcpy [{dst}], [{src}], {size}", dst = reg(*dst), src = reg(*src))
+            format!(
+                "memcpy [{dst}], [{src}], {size}",
+                dst = reg(*dst),
+                src = reg(*src)
+            )
         }
     }
 }
