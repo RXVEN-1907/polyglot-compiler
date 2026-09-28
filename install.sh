@@ -2,7 +2,8 @@
 # ---------------------------------------------------------------------------
 # install.sh — installer for the Polyglot compiler driver.
 #
-# Installs the single-file Python 3 driver 'polyglot' into a user prefix.
+# Installs the Python 3 driver 'polyglot' into a user prefix: the launcher
+# plus the 'polyglot_lib' package directory it imports (copied alongside).
 # No superuser privileges are required.
 #
 # Usage:
@@ -10,7 +11,8 @@
 #   ./install.sh --uninstall [--prefix DIR]   remove the installed driver
 #
 # The driver is placed in PREFIX itself when PREFIX ends in /bin, otherwise
-# in PREFIX/bin (e.g. --prefix /opt/pg installs /opt/pg/bin/polyglot).
+# in PREFIX/bin (e.g. --prefix /opt/pg installs /opt/pg/bin/polyglot and
+# /opt/pg/bin/polyglot_lib).
 # Default prefix: ~/.local/bin
 #
 # What is checked:
@@ -110,17 +112,22 @@ case "$PREFIX" in
   *)     BIN_DIR="$PREFIX/bin" ;;
 esac
 TARGET="$BIN_DIR/polyglot"
+LIB_TARGET="$BIN_DIR/polyglot_lib"
 
 # ---------------------------------------------------------------------------
 # Locate the 'polyglot' source: next to this script when install.sh exists on
 # disk (a clone); otherwise (curl | bash) it is downloaded from the repo.
+# A local source is used only when BOTH the launcher and the polyglot_lib
+# package directory are present.
 # ---------------------------------------------------------------------------
 SCRIPT_SRC=""
+LIB_SRC=""
 SELF_PATH="${BASH_SOURCE[0]:-}"
 if [ -n "$SELF_PATH" ] && [ -f "$SELF_PATH" ]; then
   SCRIPT_DIR="$(cd -- "$(dirname -- "$SELF_PATH")" && pwd -P)"
-  if [ -f "$SCRIPT_DIR/polyglot" ]; then
+  if [ -f "$SCRIPT_DIR/polyglot" ] && [ -d "$SCRIPT_DIR/polyglot_lib" ]; then
     SCRIPT_SRC="$SCRIPT_DIR/polyglot"
+    LIB_SRC="$SCRIPT_DIR/polyglot_lib"
   fi
 fi
 
@@ -134,11 +141,18 @@ if [ "$UNINSTALL" -eq 1 ]; then
   else
     info "$TARGET not found (already uninstalled?)"
   fi
+  if [ -d "$LIB_TARGET" ]; then
+    rm -rf -- "$LIB_TARGET"
+    info "removed $LIB_TARGET"
+  else
+    info "$LIB_TARGET not found (already uninstalled?)"
+  fi
   # Tidy an install dir we may have created, but never remove ~/.local/bin.
   if [ "$BIN_DIR" != "$HOME/.local/bin" ]; then
     rmdir -- "$BIN_DIR" 2>/dev/null || true
   fi
   [ -e "$TARGET" ] && die "uninstall failed: $TARGET still present" 1
+  [ -d "$LIB_TARGET" ] && die "uninstall failed: $LIB_TARGET still present" 1
   exit 0
 fi
 
@@ -215,36 +229,103 @@ fi
 # Install
 # ---------------------------------------------------------------------------
 
+# Package files that ship next to the launcher (keep in sync with the repo).
+POLYGLOT_LIB_FILES=(
+  __init__.py
+  cli.py
+  toolchain.py
+  backends.py
+  cache.py
+  plugin_client.py
+  output.py
+  config.py
+  commands/__init__.py
+  commands/analyze.py
+  commands/build.py
+  commands/check.py
+  commands/clean.py
+  commands/deps.py
+  commands/doctor.py
+  commands/emit_asm.py
+  commands/emit_ir.py
+  commands/fmt.py
+  commands/init.py
+  commands/jit.py
+  commands/mca.py
+  commands/plugin.py
+  commands/preproc.py
+  commands/repl.py
+  commands/run.py
+  commands/stats.py
+  commands/targets.py
+  commands/tidy.py
+  commands/version.py
+  commands/watch.py
+)
+
 # curl | bash: download the driver ourselves (stdin belongs to the script).
-TMP_SRC=""
-if [ -z "$SCRIPT_SRC" ]; then
-  TMP_SRC="$(mktemp)"
-  info "downloading 'polyglot' from $RAW_URL/polyglot"
+fetch_url() {
+  # fetch_url URL DEST
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$RAW_URL/polyglot" -o "$TMP_SRC" || die "download failed (curl)" 1
+    curl -fsSL "$1" -o "$2" || return 1
   elif command -v wget >/dev/null 2>&1; then
-    wget -qO "$TMP_SRC" "$RAW_URL/polyglot" || die "download failed (wget)" 1
+    wget -qO "$2" "$1" || return 1
   else
     die "need curl or wget to download 'polyglot'" 1
   fi
+}
+
+TMP_SRC=""
+TMP_LIB=""
+if [ -z "$SCRIPT_SRC" ]; then
+  TMP_SRC="$(mktemp)"
+  TMP_LIB="$(mktemp -d)"
+  info "downloading 'polyglot' from $RAW_URL/polyglot"
+  fetch_url "$RAW_URL/polyglot" "$TMP_SRC" || die "download failed (curl)" 1
+  info "downloading the 'polyglot_lib' package from $RAW_URL/polyglot_lib"
+  for rel in "${POLYGLOT_LIB_FILES[@]}"; do
+    dest="$TMP_LIB/polyglot_lib/$rel"
+    mkdir -p -- "$(dirname -- "$dest")"
+    fetch_url "$RAW_URL/polyglot_lib/$rel" "$dest" \
+      || die "download failed: polyglot_lib/$rel" 1
+  done
   SCRIPT_SRC="$TMP_SRC"
+  LIB_SRC="$TMP_LIB/polyglot_lib"
 fi
 
-# Sanity check: the driver must be valid Python (catches truncated downloads).
+# Sanity check: every installed file must be valid Python (catches truncated
+# downloads).
 PYC_DIR="$(mktemp -d)"
-if ! python3 -c 'import py_compile, sys; py_compile.compile(sys.argv[1], cfile=sys.argv[2] + "/check.pyc", doraise=True)' \
-     "$SCRIPT_SRC" "$PYC_DIR" >/dev/null 2>&1; then
+check_syntax() {
+  python3 -c 'import py_compile, sys; py_compile.compile(sys.argv[1], cfile=sys.argv[2] + "/check.pyc", doraise=True)' \
+       "$1" "$PYC_DIR" >/dev/null 2>&1
+}
+cleanup_tmp() {
   rm -rf -- "$PYC_DIR"
-  [ -n "$TMP_SRC" ] && rm -f -- "$TMP_SRC"
+  if [ -n "$TMP_SRC" ]; then rm -f -- "$TMP_SRC"; fi
+  if [ -n "$TMP_LIB" ]; then rm -rf -- "$TMP_LIB"; fi
+}
+if ! check_syntax "$SCRIPT_SRC"; then
+  cleanup_tmp
   die "'polyglot' failed a python syntax check; source is corrupt" 1
 fi
-rm -rf -- "$PYC_DIR"
+while IFS= read -r pyfile; do
+  if ! check_syntax "$pyfile"; then
+    cleanup_tmp
+    die "'$pyfile' failed a python syntax check; source is corrupt" 1
+  fi
+done < <(find "$LIB_SRC" -name '*.py' -type f | sort)
 
 mkdir -p -- "$BIN_DIR"
 cp -- "$SCRIPT_SRC" "$TARGET"
 chmod +x -- "$TARGET"
-if [ -n "$TMP_SRC" ]; then rm -f -- "$TMP_SRC"; fi
+rm -rf -- "$LIB_TARGET"
+cp -R -- "$LIB_SRC" "$LIB_TARGET"
+# do not ship bytecode caches from the source tree
+find "$LIB_TARGET" -type d -name '__pycache__' -prune -exec rm -rf -- {} +
+cleanup_tmp
 info "installed $TARGET"
+info "installed $LIB_TARGET"
 info "installed: $("$TARGET" version 2>/dev/null | head -n 1 || echo 'polyglot (version unknown)')"
 
 # Warn (with the exact fix) when the install dir is not on PATH.

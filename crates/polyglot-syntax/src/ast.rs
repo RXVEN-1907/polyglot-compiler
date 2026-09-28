@@ -10,9 +10,24 @@ use polyglot_core::{IntKind, StructDef, Type};
 #[derive(Debug, Default)]
 pub struct TranslationUnit {
     pub structs: Vec<StructDef>,
+    /// Parsed `enum` definitions in source order (unions are recorded
+    /// as [`StructDef`]s with `is_union` set). Enum constants
+    /// themselves fold to integer literals at parse time, so the
+    /// checker and lowerer see plain ints.
+    pub enums: Vec<EnumDef>,
     pub typedefs: Vec<(String, Type)>,
     pub globals: Vec<GlobalDef>,
     pub funcs: Vec<FunctionDef>,
+}
+
+/// A parsed `enum` definition (`enum Color { RED, GREEN = 4, BLUE };`).
+#[derive(Clone, Debug)]
+pub struct EnumDef {
+    /// Tag name; empty for anonymous enums.
+    pub name: String,
+    /// `(constant name, value)` in declaration order. Implicit values
+    /// continue from the previous constant (`0` for the first).
+    pub constants: Vec<(String, i128)>,
 }
 
 /// Binary operators.

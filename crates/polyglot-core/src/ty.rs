@@ -29,17 +29,44 @@ impl IntKind {
     }
 }
 
-/// A field of a struct definition.
+/// Bit-field placement within a struct or union, filled in by
+/// [`StructDef::layout`]. The declared type (`ty`) doubles as the
+/// storage-unit type: its alignment is the unit width the field packs
+/// into.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BitfieldLayout {
+    /// Position of the least significant bit of the field within its
+    /// storage unit (little-endian bit order, matching x86-64).
+    pub lsb: u32,
+    /// Width of the field in bits; `0` marks an unnamed `:0` boundary
+    /// (which occupies no storage and is never accessed).
+    pub width: u32,
+    /// True when declared `signed` (reads sign-extend). The frontend's
+    /// integer model is otherwise unsignedness-free, so this is
+    /// recorded only for bit-fields.
+    pub signed: bool,
+}
+
+/// A field of a struct or union definition. Unnamed bit-fields use the
+/// empty string as their name; it is not a valid identifier, so it can
+/// never collide with a user field and member lookup never finds it.
 #[derive(Clone, Debug)]
 pub struct StructField {
     pub name: String,
     pub ty: Type,
-    /// Byte offset from the start of the struct; computed by the
-    /// type checker once the layout is known (`0` before that).
+    /// Byte offset from the start of the struct; for bit-fields, the
+    /// byte offset of the containing storage unit. Computed by
+    /// [`StructDef::layout`] (`0` before that).
     pub offset: u64,
+    /// Present for bit-field members (`unsigned f : 3;`).
+    pub bitfield: Option<BitfieldLayout>,
 }
 
-/// A struct definition (`struct Point { int x; int y; };`).
+/// A struct or union definition (`struct Point { int x; int y; };`).
+///
+/// Unions are represented with the same type: every member sits at
+/// offset 0 and the size is the largest member rounded to the
+/// alignment.
 #[derive(Clone, Debug)]
 pub struct StructDef {
     pub name: String,
@@ -48,28 +75,101 @@ pub struct StructDef {
     /// type checker (`0` for incomplete/forward declarations).
     pub size: u64,
     pub align: u64,
+    /// True for `union` definitions; affects layout only.
+    pub is_union: bool,
 }
 
 impl StructDef {
     /// Compute field offsets, `size` and `align` for this definition.
     ///
-    /// Layout is the classic System V scheme: every field is aligned
-    /// to its own alignment, the total size is rounded up to the
-    /// struct's alignment.
+    /// Plain structs use the classic System V scheme: every field is
+    /// aligned to its own alignment, the total size is rounded up to
+    /// the struct's alignment.
+    ///
+    /// Bit-fields follow the ELF x86-64 psABI: a field of declared
+    /// type `T` and width `n` packs into the current `sizeof(T)`-aligned
+    /// storage unit when it fits, otherwise a fresh unit is started;
+    /// unnamed `:0` fields close the current unit. Named bit-fields
+    /// contribute their declared type's alignment to the struct;
+    /// unnamed ones (including `:0`) contribute nothing.
+    ///
+    /// Unions place every member at offset 0 (so member accesses
+    /// overlap, which is exactly C type punning); the size is the
+    /// largest member rounded up to the alignment.
     ///
     /// `struct_table` is used to look up the layout of nested struct types.
     pub fn layout(&mut self, struct_table: &HashMap<String, StructDef>) {
-        let mut offset = 0u64;
+        if self.is_union {
+            self.layout_union(struct_table);
+            return;
+        }
+        // Bit cursor: allocation position in bits from the struct start.
+        let mut bit = 0u64;
         let mut max_align = 1u64;
         for field in &mut self.fields {
-            let falign = field.ty.align_with_structs(struct_table);
-            max_align = max_align.max(falign);
-            offset = round_up(offset, falign);
-            field.offset = offset;
-            offset += field.ty.size_with_structs(struct_table);
+            if let Some(bf) = field.bitfield {
+                let unit_bits = field.ty.align_with_structs(struct_table) * 8;
+                if bf.width == 0 {
+                    // `:0`: move to the next storage-unit boundary.
+                    bit = round_up(bit, unit_bits);
+                    field.offset = bit / 8;
+                    continue;
+                }
+                if bit % unit_bits + bf.width as u64 > unit_bits {
+                    bit = round_up(bit, unit_bits);
+                }
+                let unit_start = bit - bit % unit_bits;
+                let lsb = (bit - unit_start) as u32;
+                field.offset = unit_start / 8;
+                field.bitfield = Some(BitfieldLayout { lsb, ..bf });
+                bit += bf.width as u64;
+                // Only named bit-fields affect the struct's alignment;
+                // unnamed padding (including `:0`) does not.
+                if !field.name.is_empty() {
+                    max_align = max_align.max(field.ty.align_with_structs(struct_table));
+                }
+            } else {
+                let falign = field.ty.align_with_structs(struct_table);
+                max_align = max_align.max(falign);
+                bit = round_up(bit, falign * 8);
+                field.offset = bit / 8;
+                bit += field.ty.size_with_structs(struct_table) * 8;
+            }
         }
         self.align = max_align;
-        self.size = round_up(offset, max_align);
+        self.size = round_up(bit.div_ceil(8), max_align);
+    }
+
+    /// Union layout: all members overlap at offset 0.
+    fn layout_union(&mut self, struct_table: &HashMap<String, StructDef>) {
+        let mut max_size = 0u64;
+        let mut max_align = 1u64;
+        for field in &mut self.fields {
+            match field.bitfield {
+                // Unnamed bit-fields contribute nothing in a union
+                // (verified against gcc/clang on x86-64).
+                Some(_) if field.name.is_empty() => {
+                    field.offset = 0;
+                }
+                // A named bit-field occupies a whole storage unit of
+                // its declared type, starting at bit 0.
+                Some(bf) => {
+                    let unit = field.ty.align_with_structs(struct_table);
+                    field.offset = 0;
+                    field.bitfield = Some(BitfieldLayout { lsb: 0, ..bf });
+                    max_size = max_size.max(unit);
+                    max_align = max_align.max(unit);
+                }
+                None => {
+                    let falign = field.ty.align_with_structs(struct_table);
+                    max_size = max_size.max(field.ty.size_with_structs(struct_table));
+                    max_align = max_align.max(falign);
+                    field.offset = 0;
+                }
+            }
+        }
+        self.align = max_align;
+        self.size = round_up(max_size, max_align);
     }
 
     pub fn field(&self, name: &str) -> Option<(u64, &Type)> {

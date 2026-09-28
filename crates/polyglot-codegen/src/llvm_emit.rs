@@ -60,6 +60,48 @@ fn is_aggregate(ty: &Type) -> bool {
     matches!(ty, Type::Array(..) | Type::Struct(_))
 }
 
+/// x86-64 System V classification for an aggregate passed or returned
+/// by value.
+///
+/// The psABI splits every object into eightbytes and classes each one.
+/// This backend implements the subset the frontend's type model can
+/// express:
+///
+/// * all-INTEGER aggregates of 1..=8 bytes pass/return in one register
+///   (one `i64` piece);
+/// * all-INTEGER aggregates of 9..=16 bytes pass/return in two
+///   registers (two `i64` pieces: RDI/RSI for arguments, RAX/RDX for
+///   returns); a partial trailing eightbyte travels in the low bytes of
+///   its register;
+/// * anything larger than 16 bytes is MEMORY class: arguments pass
+///   behind a `byval` pointer, returns behind a hidden leading `sret`
+///   pointer;
+/// * SSE class requires float/double members. The frontend has no
+///   floating-point types, so no eightbyte can classify as SSE today;
+///   if one ever does, emission bails with a named error (see
+///   [`Emitter::abi_plan`]).
+struct AbiPlan {
+    /// MEMORY class: pass/return through a stack pointer instead of
+    /// register pieces.
+    memory: bool,
+    /// Width in bytes of each register piece, in order (1, 2, 4 or 8).
+    /// Empty for MEMORY-class aggregates.
+    pieces: Vec<u64>,
+}
+
+/// LLVM-level shape of one IR parameter/argument under the ABI.
+#[derive(Clone, Debug)]
+struct AbiArg {
+    /// Full LLVM text of the parameter type, including any ABI
+    /// attribute (`i64`, `ptr byval(%struct.X) align 8`, ...).
+    ty: String,
+    /// The IR-level type the LLVM shape was derived from.
+    ir_ty: Type,
+    /// Non-empty for INTEGER-class struct arguments: the eightbyte
+    /// widths, each passed as one `i64`.
+    pieces: Vec<u64>,
+}
+
 /// Render bytes as an LLVM `c"..."` constant string body.
 fn escape_c_bytes(bytes: &[u8]) -> String {
     let mut s = String::from("c\"");
@@ -162,6 +204,9 @@ struct Emitter<'a> {
     structs: &'a HashMap<String, StructDef>,
     global_types: HashMap<&'a str, Type>,
     sigs: HashMap<&'a str, Sig>,
+    /// Actual names of the compiler-generated string-pool globals,
+    /// in pool order (see [`Emitter::resolve_global`]).
+    lc_names: Vec<String>,
     /// Header, struct types, globals and declarations.
     header: String,
     /// Function bodies, appended after the header at assembly time.
@@ -195,11 +240,18 @@ impl<'a> Emitter<'a> {
                 )
             })
             .collect();
+        let lc_names = module
+            .globals
+            .iter()
+            .filter(|g| g.name.starts_with(".LC"))
+            .map(|g| g.name.clone())
+            .collect();
         Emitter {
             module,
             structs: &module.structs,
             global_types,
             sigs,
+            lc_names,
             header: String::new(),
             bodies: String::new(),
             extra_decls: Vec::new(),
@@ -207,6 +259,27 @@ impl<'a> Emitter<'a> {
             fn_state: None,
             memcpy_used: false,
         }
+    }
+
+    /// Resolve a global reference to its emitted name.
+    ///
+    /// The lowerer names interned string literals by their pool index
+    /// (`.LC0`, `.LC1`, ...) but stores them positionally *after* the
+    /// TU's user globals, so with user globals present a body's `.LC1`
+    /// is a different object from the emitted `@.LC1`. `.LC<n>`
+    /// references therefore always map onto the `<n>`-th string-pool
+    /// entry in order; C identifiers cannot start with `.`, so no user
+    /// global can collide with this namespace. Without user globals the
+    /// mapping is the identity.
+    fn resolve_global(&self, name: &str) -> String {
+        if let Some(idx_str) = name.strip_prefix(".LC") {
+            if let Ok(idx) = idx_str.parse::<usize>() {
+                if let Some(actual) = self.lc_names.get(idx) {
+                    return actual.clone();
+                }
+            }
+        }
+        name.to_string()
     }
 
     fn run(mut self, source_name: &str) -> Result<String> {
@@ -227,14 +300,8 @@ impl<'a> Emitter<'a> {
         names.sort();
         for name in names {
             let def = &self.module.structs[name.as_str()];
-            let mut fields = String::new();
-            for (i, field) in def.fields.iter().enumerate() {
-                if i > 0 {
-                    fields.push_str(", ");
-                }
-                fields.push_str(&llvm_type(&field.ty, self.structs)?);
-            }
-            let _ = writeln!(self.header, "%struct.{name} = type {{ {fields} }}");
+            let body = self.struct_type_body(def)?;
+            let _ = writeln!(self.header, "%struct.{name} = type {body}");
         }
         if !self.module.structs.is_empty() {
             self.header.push('\n');
@@ -247,8 +314,19 @@ impl<'a> Emitter<'a> {
             self.header.push('\n');
         }
 
+        // Declarations, skipping names this module also defines: the
+        // frontend keeps a prototype and its definition as two
+        // Function entries, and LLVM rejects a `declare` alongside a
+        // `define` of the same symbol.
+        let defined: HashSet<&str> = self
+            .module
+            .funcs
+            .iter()
+            .filter(|f| f.is_definition)
+            .map(|f| f.name.as_str())
+            .collect();
         for f in &self.module.funcs {
-            if !f.is_definition {
+            if !f.is_definition && !defined.contains(f.name.as_str()) {
                 let line = self.declare_line(f)?;
                 let _ = writeln!(self.header, "{line}");
             }
@@ -290,6 +368,28 @@ impl<'a> Emitter<'a> {
 
     // ---- module level ----------------------------------------------------
 
+    /// LLVM body of a named struct type. Plain structs map field for
+    /// field (LLVM packs literal structs with the same natural
+    /// alignment scheme `StructDef::layout` uses, so sizes and offsets
+    /// agree). Unions and structs containing bit-fields would NOT
+    /// agree — a union repeats every member at offset 0 and bit-fields
+    /// share storage units, while an LLVM literal struct would lay
+    /// each member out back to back — so those render as a byte array
+    /// of exactly the C size; every access is byte-addressed anyway.
+    fn struct_type_body(&self, def: &StructDef) -> Result<String> {
+        if def.is_union || def.fields.iter().any(|f| f.bitfield.is_some()) {
+            return Ok(format!("{{ [{} x i8] }}", def.size));
+        }
+        let mut fields = String::new();
+        for (i, field) in def.fields.iter().enumerate() {
+            if i > 0 {
+                fields.push_str(", ");
+            }
+            fields.push_str(&llvm_type(&field.ty, self.structs)?);
+        }
+        Ok(format!("{{ {fields} }}"))
+    }
+
     fn declare_line(&self, f: &Function) -> Result<String> {
         self.sig_decl_line(
             &f.name,
@@ -302,12 +402,22 @@ impl<'a> Emitter<'a> {
     }
 
     fn sig_decl_line(&self, name: &str, sig: &Sig) -> Result<String> {
-        let params = sig
-            .params
-            .iter()
-            .map(|t| llvm_type(t, self.structs))
-            .collect::<Result<Vec<_>>>()?
-            .join(", ");
+        let mut parts: Vec<String> = Vec::new();
+        let (ret, sret_attr) = self.abi_ret(&sig.ret)?;
+        if let Some(attr) = &sret_attr {
+            parts.push(attr.clone());
+        }
+        for arg in self.abi_args(&sig.params)? {
+            if arg.pieces.is_empty() {
+                parts.push(arg.ty);
+            } else {
+                // One i64 per eightbyte piece.
+                for _ in &arg.pieces {
+                    parts.push("i64".to_string());
+                }
+            }
+        }
+        let params = parts.join(", ");
         let va = if sig.variadic {
             if params.is_empty() {
                 "..."
@@ -317,7 +427,6 @@ impl<'a> Emitter<'a> {
         } else {
             ""
         };
-        let ret = llvm_type(&sig.ret, self.structs)?;
         Ok(format!("declare {ret} @{name}({params}{va})"))
     }
 
@@ -368,7 +477,19 @@ impl<'a> Emitter<'a> {
     /// the struct's alignment (all memory accesses in the IR are typed
     /// loads through `ptr`, so layout is what matters).
     fn emit_global(&mut self, g: &GlobalVar) -> Result<()> {
-        let bytes = g.init.bytes(g.size);
+        // The lowerer sizes globals with a table-less `Type::size()`,
+        // which reports 0 (clamped to 1) for struct types; the struct
+        // table knows the real layout, so reconcile the object size
+        // upward for aggregates with a known definition.
+        let obj_size = match &g.ty {
+            Type::Struct(n) => self
+                .structs
+                .get(n)
+                .map(|def| g.size.max(def.size))
+                .unwrap_or(g.size),
+            _ => g.size,
+        };
+        let bytes = g.init.bytes(obj_size);
         let elem_size = g.ty.size().max(1);
         let name = &g.name;
 
@@ -383,6 +504,14 @@ impl<'a> Emitter<'a> {
             return Ok(());
         }
 
+        // A global declared without an initializer is a C tentative
+        // definition: emit it as a COMMON symbol so several TUs may
+        // carry it and the linker merges them (a strong definition
+        // from any TU overrides the common).
+        let linkage = match g.init {
+            GlobalInit::Zero => "common ",
+            GlobalInit::Bytes(_) => "",
+        };
         let galign = align_of(&g.ty, self.structs);
 
         if matches!(g.ty, Type::Pointer(_)) {
@@ -394,7 +523,7 @@ impl<'a> Emitter<'a> {
                 w[..n].copy_from_slice(&bytes[..n]);
                 format!("inttoptr (i64 {} to ptr)", i64::from_le_bytes(w))
             };
-            let _ = writeln!(self.header, "@{name} = global ptr {init}, align 8");
+            let _ = writeln!(self.header, "@{name} = {linkage}global ptr {init}, align 8");
             return Ok(());
         }
 
@@ -413,7 +542,7 @@ impl<'a> Emitter<'a> {
             };
             let _ = writeln!(
                 self.header,
-                "@{name} = global [{count} x {ety}] {init}, align {galign}",
+                "@{name} = {linkage}global [{count} x {ety}] {init}, align {galign}",
                 ety = llvm_type(&g.ty, self.structs)?,
             );
             return Ok(());
@@ -427,8 +556,8 @@ impl<'a> Emitter<'a> {
             };
             let _ = writeln!(
                 self.header,
-                "@{name} = global [{size} x i8] {init}, align {galign}",
-                size = g.size,
+                "@{name} = {linkage}global [{size} x i8] {init}, align {galign}",
+                size = obj_size,
             );
             return Ok(());
         }
@@ -440,7 +569,7 @@ impl<'a> Emitter<'a> {
         };
         let _ = writeln!(
             self.header,
-            "@{name} = global {ty} {init}, align {galign}",
+            "@{name} = {linkage}global {ty} {init}, align {galign}",
             ty = llvm_type(&g.ty, self.structs)?,
         );
         Ok(())
@@ -466,6 +595,142 @@ impl<'a> Emitter<'a> {
                 })
             }
             _ => bail!("unsupported scalar global type {ty}"),
+        }
+    }
+
+    // ---- SysV x86-64 aggregate ABI -----------------------------------------
+
+    /// Compute the ABI plan for passing/returning `ty` by value.
+    fn abi_plan(&self, ty: &Type) -> Result<AbiPlan> {
+        let name = match ty {
+            Type::Struct(n) => n,
+            other => bail!("cannot pass {other} by value"),
+        };
+        let def = self
+            .structs
+            .get(name)
+            .ok_or_else(|| anyhow!("unknown struct {name} in ABI classification"))?;
+        let size = def.size;
+        if size == 0 {
+            bail!("struct {name} has zero size; cannot pass it by value");
+        }
+        if size > 16 {
+            // psABI: more than sixteen bytes always has class MEMORY.
+            return Ok(AbiPlan {
+                memory: true,
+                pieces: Vec::new(),
+            });
+        }
+        // Classify the eightbytes. Every field type in the current
+        // model (integers, pointers, arrays, nested aggregates) is
+        // INTEGER class, so the register pieces are simply the
+        // object's eightbytes; the trailing one may be partial.
+        // Classifying per field would yield SSE for float/double
+        // members, but no such type exists yet — bail loudly rather
+        // than silently mis-compile if floating point ever lands.
+        for field in &def.fields {
+            let is_integerish =
+                matches!(field.ty, Type::Int(_) | Type::Pointer(_)) || is_aggregate(&field.ty);
+            if !is_integerish {
+                bail!(
+                    "struct {name} member `{}` has type {}, which needs SSE-class \
+                     passing; the native backend does not support floating-point \
+                     members yet",
+                    if field.name.is_empty() {
+                        "<bit-field>"
+                    } else {
+                        &field.name
+                    },
+                    field.ty
+                );
+            }
+        }
+        let mut pieces = Vec::new();
+        let mut off = 0u64;
+        while off < size {
+            pieces.push((size - off).min(8));
+            off += 8;
+        }
+        Ok(AbiPlan {
+            memory: false,
+            pieces,
+        })
+    }
+
+    /// Alignment for MEMORY-class traffic (`byval` stack copies): the
+    /// x86-64 stack argument granularity is 8 bytes, so the slot is
+    /// never aligned below that.
+    fn abi_align(&self, ty: &Type) -> Result<u64> {
+        Ok(align_of(ty, self.structs).max(8))
+    }
+
+    /// Full LLVM text of a MEMORY-class argument type: a pointer with
+    /// `byval` (the copy lands on the callee's stack) and its
+    /// alignment as a separate attribute.
+    fn byval_attr(&self, t: &Type) -> Result<String> {
+        Ok(format!(
+            "ptr byval({}) align {}",
+            llvm_type(t, self.structs)?,
+            self.abi_align(t)?
+        ))
+    }
+
+    /// Full LLVM text of the hidden leading parameter type for a
+    /// MEMORY-class struct return.
+    fn sret_attr(&self, t: &Type) -> Result<String> {
+        Ok(format!(
+            "ptr sret({}) align {}",
+            llvm_type(t, self.structs)?,
+            align_of(t, self.structs)
+        ))
+    }
+
+    /// LLVM-level shape of one IR parameter under the ABI.
+    fn abi_arg(&self, t: &Type) -> Result<AbiArg> {
+        if is_aggregate(t) {
+            let plan = self.abi_plan(t)?;
+            if plan.memory {
+                Ok(AbiArg {
+                    ty: self.byval_attr(t)?,
+                    ir_ty: t.clone(),
+                    pieces: Vec::new(),
+                })
+            } else {
+                Ok(AbiArg {
+                    ty: "i64".to_string(),
+                    ir_ty: t.clone(),
+                    pieces: plan.pieces,
+                })
+            }
+        } else {
+            Ok(AbiArg {
+                ty: llvm_type(t, self.structs)?,
+                ir_ty: t.clone(),
+                pieces: Vec::new(),
+            })
+        }
+    }
+
+    /// LLVM-level shape of a whole parameter list.
+    fn abi_args(&self, params: &[Type]) -> Result<Vec<AbiArg>> {
+        params.iter().map(|t| self.abi_arg(t)).collect()
+    }
+
+    /// LLVM return type for `ret`, plus the hidden leading `sret`
+    /// parameter attribute when the ABI demands one (MEMORY-class
+    /// struct returns, which make the LLVM-level return type `void`).
+    fn abi_ret(&self, ret: &Type) -> Result<(String, Option<String>)> {
+        if is_aggregate(ret) {
+            let plan = self.abi_plan(ret)?;
+            if plan.memory {
+                Ok(("void".to_string(), Some(self.sret_attr(ret)?)))
+            } else if plan.pieces.len() == 1 {
+                Ok(("i64".to_string(), None))
+            } else {
+                Ok(("{i64, i64}".to_string(), None))
+            }
+        } else {
+            Ok((llvm_type(ret, self.structs)?, None))
         }
     }
 
@@ -511,14 +776,17 @@ impl<'a> Emitter<'a> {
                             .ok_or_else(|| anyhow!("LoadLocal references unknown slot s{slot}"))?,
                     ),
                     Instr::AddrLocal { .. } | Instr::GetGlobal { .. } => Some(Type::void_ptr()),
-                    Instr::LoadGlobal { name, .. } => Some(
-                        self.global_types
-                            .get(name.as_str())
-                            .cloned()
-                            .ok_or_else(|| {
-                                anyhow!("LoadGlobal references unknown global @{name}")
-                            })?,
-                    ),
+                    Instr::LoadGlobal { name, .. } => {
+                        let resolved = self.resolve_global(name);
+                        Some(
+                            self.global_types
+                                .get(resolved.as_str())
+                                .cloned()
+                                .ok_or_else(|| {
+                                    anyhow!("LoadGlobal references unknown global @{name}")
+                                })?,
+                        )
+                    }
                     Instr::Load { ty, .. } => Some(ty.clone()),
                     Instr::Binop { op, ty, .. } => Some(if op.is_comparison() {
                         Type::int()
@@ -579,13 +847,27 @@ impl<'a> Emitter<'a> {
             tmp: 0,
         });
 
-        let params = f
-            .param_tys
-            .iter()
-            .enumerate()
-            .map(|(i, t)| Ok(format!("{} %p{i}", llvm_type(t, self.structs)?)))
-            .collect::<Result<Vec<_>>>()?
-            .join(", ");
+        // ABI-shaped signature: MEMORY-class struct returns grow a
+        // hidden leading `sret` pointer; INTEGER-class struct params
+        // arrive as one `i64` per eightbyte; MEMORY-class struct
+        // params arrive as one `ptr byval`.
+        let abi = self.abi_args(&f.param_tys)?;
+        let (ret_ll, sret_attr) = self.abi_ret(&f.ret)?;
+
+        let mut params: Vec<String> = Vec::new();
+        if let Some(attr) = &sret_attr {
+            params.push(format!("{attr} %agg"));
+        }
+        for (i, arg) in abi.iter().enumerate() {
+            if arg.pieces.is_empty() {
+                params.push(format!("{} %p{i}", arg.ty));
+            } else {
+                for j in 0..arg.pieces.len() {
+                    params.push(format!("i64 %p{i}.{j}"));
+                }
+            }
+        }
+        let params = params.join(", ");
         let va = if f.variadic {
             if params.is_empty() {
                 "..."
@@ -595,10 +877,9 @@ impl<'a> Emitter<'a> {
         } else {
             ""
         };
-        let ret = llvm_type(&f.ret, self.structs)?;
         let _ = writeln!(
             self.bodies,
-            "define {ret} @{name}({params}{va}) {{",
+            "define {ret_ll} @{name}({params}{va}) {{",
             name = f.name
         );
 
@@ -606,28 +887,59 @@ impl<'a> Emitter<'a> {
         // spill incoming parameters into their register homes.
         let _ = writeln!(self.bodies, "bb0:");
         for (i, slot) in f.slots.iter().enumerate() {
-            if is_aggregate(&slot.ty) {
-                let al = align_of(&slot.ty, self.structs);
-                let _ = writeln!(
-                    self.bodies,
-                    "  %s{i}.a = alloca {ty}, align {al}",
-                    ty = llvm_type(&slot.ty, self.structs)?,
-                );
-            } else {
-                let ty = llvm_type(&slot.ty, self.structs)?;
-                let al = align_of(&slot.ty, self.structs);
-                let _ = writeln!(self.bodies, "  %s{i}.a = alloca {ty}, align {al}");
-            }
+            let ty = llvm_type(&slot.ty, self.structs)?;
+            let al = align_of(&slot.ty, self.structs);
+            let _ = writeln!(self.bodies, "  %s{i}.a = alloca {ty}, align {al}");
         }
         for (i, ty) in self.fn_state.as_ref().unwrap().reg_ty.iter().enumerate() {
             let ll = llvm_type(ty, self.structs)?;
             let al = align_of(ty, self.structs);
             let _ = writeln!(self.bodies, "  %r{i}.a = alloca {ll}, align {al}");
         }
-        for (i, ty) in f.param_tys.iter().enumerate() {
-            let ll = llvm_type(ty, self.structs)?;
-            let al = align_of(ty, self.structs);
-            let _ = writeln!(self.bodies, "  store {ll} %p{i}, ptr %r{i}.a, align {al}");
+        for (i, arg) in abi.iter().enumerate() {
+            if arg.pieces.is_empty() && !is_aggregate(&arg.ir_ty) {
+                // Scalar: spill the incoming value as-is.
+                let al = align_of(&arg.ir_ty, self.structs);
+                let _ = writeln!(
+                    self.bodies,
+                    "  store {} %p{i}, ptr %r{i}.a, align {al}",
+                    arg.ty
+                );
+            } else if arg.pieces.is_empty() {
+                // MEMORY-class struct: the parameter is a pointer to
+                // the caller's stack copy; copy it into the home.
+                let ll = llvm_type(&arg.ir_ty, self.structs)?;
+                let al = align_of(&arg.ir_ty, self.structs);
+                let v = self.fresh();
+                let _ = writeln!(self.bodies, "  {v} = load {ll}, ptr %p{i}, align {al}");
+                self.line(&format!("store {ll} {v}, ptr %r{i}.a, align {al}"));
+            } else {
+                // INTEGER-class struct: reassemble the eightbyte
+                // pieces into the register's struct home so member
+                // access sees the original bytes.
+                for (j, &w) in arg.pieces.iter().enumerate() {
+                    let val = if w == 8 {
+                        format!("%p{i}.{j}")
+                    } else {
+                        let t = self.fresh();
+                        let _ = writeln!(self.bodies, "  {t} = trunc i64 %p{i}.{j} to i{}", w * 8);
+                        t
+                    };
+                    let q = if j == 0 {
+                        format!("%r{i}.a")
+                    } else {
+                        let q = self.fresh();
+                        let _ = writeln!(
+                            self.bodies,
+                            "  {q} = getelementptr i8, ptr %r{i}.a, i64 {}",
+                            8 * j
+                        );
+                        q
+                    };
+                    let al = align_of(&arg.ir_ty, self.structs).min(w);
+                    self.line(&format!("store i{} {val}, ptr {q}, align {al}", w * 8));
+                }
+            }
         }
 
         for (bi, block) in f.blocks.iter().enumerate() {
@@ -719,12 +1031,36 @@ impl<'a> Emitter<'a> {
         }
     }
 
+    /// Pointer to the by-value struct carried by register `r`:
+    /// aggregate-typed registers hold the struct value in their home
+    /// alloca (call results, ternary merges), so the home itself is
+    /// the pointer; pointer-typed registers hold a decayed aggregate
+    /// address, which is loaded.
+    fn struct_ptr_of_reg(&mut self, r: Reg) -> Result<String> {
+        let st = self.fn_state.as_ref().unwrap();
+        let have = st.reg_ty[r as usize].clone();
+        if is_aggregate(&have) {
+            Ok(st.reg_addr[r as usize].clone())
+        } else {
+            self.load_reg(r, &Type::void_ptr())
+        }
+    }
+
     // ---- instructions ------------------------------------------------------
 
     fn emit_instr(&mut self, f: &Function, instr: &Instr) -> Result<()> {
         match instr {
             Instr::Const { dest, value, ty } => {
-                let lit = const_literal(*value, ty)?;
+                // Aggregates can only appear as the lowerer's implicit
+                // all-zero return; anything else is a named error.
+                let lit = if is_aggregate(ty) {
+                    if *value != 0 {
+                        bail!("non-zero constant of aggregate type {ty}");
+                    }
+                    "zeroinitializer".to_string()
+                } else {
+                    const_literal(*value, ty)?
+                };
                 let ll = llvm_type(ty, self.structs)?;
                 let addr = self.fn_state.as_ref().unwrap().reg_addr[*dest as usize].clone();
                 let al = align_of(ty, self.structs);
@@ -744,13 +1080,41 @@ impl<'a> Emitter<'a> {
             }
             Instr::StoreLocal { slot, src } => {
                 let slot_ty = self.slot_ty(f, *slot)?;
-                if is_aggregate(&slot_ty) {
-                    bail!("StoreLocal of aggregate slot s{slot} is unsupported");
-                }
-                let v = self.load_reg(*src, &slot_ty)?;
                 let ll = llvm_type(&slot_ty, self.structs)?;
                 let al = align_of(&slot_ty, self.structs);
-                self.line(&format!("store {ll} {v}, ptr %s{slot}.a, align {al}"));
+                if is_aggregate(&slot_ty) {
+                    // By-value aggregate copy (parameter spill,
+                    // `S s = f();`): move the LLVM-level value between
+                    // the register home and the slot.
+                    let src_ty = self
+                        .fn_state
+                        .as_ref()
+                        .unwrap()
+                        .reg_ty
+                        .get(*src as usize)
+                        .cloned()
+                        .ok_or_else(|| anyhow!("StoreLocal source %r{src} out of range"))?;
+                    let v = if is_aggregate(&src_ty) {
+                        let src_addr =
+                            self.fn_state.as_ref().unwrap().reg_addr[*src as usize].clone();
+                        let v = self.fresh();
+                        let _ =
+                            writeln!(self.bodies, "  {v} = load {ll}, ptr {src_addr}, align {al}");
+                        v
+                    } else if src_ty.is_pointer() {
+                        // Decayed aggregate address: copy through it.
+                        let p = self.load_reg(*src, &Type::void_ptr())?;
+                        let v = self.fresh();
+                        let _ = writeln!(self.bodies, "  {v} = load {ll}, ptr {p}, align {al}");
+                        v
+                    } else {
+                        bail!("StoreLocal of aggregate slot s{slot} from scalar register %r{src}");
+                    };
+                    self.line(&format!("store {ll} {v}, ptr %s{slot}.a, align {al}"));
+                } else {
+                    let v = self.load_reg(*src, &slot_ty)?;
+                    self.line(&format!("store {ll} {v}, ptr %s{slot}.a, align {al}"));
+                }
             }
             Instr::AddrLocal { dest, slot } => {
                 self.slot_ty(f, *slot)?; // validate
@@ -758,30 +1122,36 @@ impl<'a> Emitter<'a> {
                 self.line(&format!("store ptr %s{slot}.a, ptr {addr}, align 8"));
             }
             Instr::GetGlobal { dest, name } => {
-                if !self.global_types.contains_key(name.as_str()) {
+                let resolved = self.resolve_global(name);
+                if !self.global_types.contains_key(resolved.as_str()) {
                     bail!("GetGlobal references unknown global @{name}");
                 }
                 let addr = self.fn_state.as_ref().unwrap().reg_addr[*dest as usize].clone();
-                self.line(&format!("store ptr @{name}, ptr {addr}, align 8"));
+                self.line(&format!("store ptr @{resolved}, ptr {addr}, align 8"));
             }
             Instr::LoadGlobal { dest, name } => {
-                if self.global_is_aggregate(name) {
+                let resolved = self.resolve_global(name);
+                if self.global_is_aggregate(&resolved) {
                     bail!("LoadGlobal of aggregate-storage global @{name} is unsupported (arrays decay to their address)");
                 }
-                let gty = self.global_ty(name)?;
+                let gty = self.global_ty(&resolved)?;
                 let ll = llvm_type(&gty, self.structs)?;
                 let al = align_of(&gty, self.structs);
                 let v = self.fresh();
-                let _ = writeln!(self.bodies, "  {v} = load {ll}, ptr @{name}, align {al}");
+                let _ = writeln!(
+                    self.bodies,
+                    "  {v} = load {ll}, ptr @{resolved}, align {al}"
+                );
                 let addr = self.fn_state.as_ref().unwrap().reg_addr[*dest as usize].clone();
                 self.line(&format!("store {ll} {v}, ptr {addr}, align {al}"));
             }
             Instr::StoreGlobal { name, src } => {
-                let gty = self.global_ty(name)?;
+                let resolved = self.resolve_global(name);
+                let gty = self.global_ty(&resolved)?;
                 let v = self.load_reg(*src, &gty)?;
                 let ll = llvm_type(&gty, self.structs)?;
                 let al = align_of(&gty, self.structs);
-                self.line(&format!("store {ll} {v}, ptr @{name}, align {al}"));
+                self.line(&format!("store {ll} {v}, ptr @{resolved}, align {al}"));
             }
             Instr::Load {
                 dest,
@@ -806,10 +1176,40 @@ impl<'a> Emitter<'a> {
             } => {
                 let p = self.load_reg(*addr, &Type::void_ptr())?;
                 let q = self.gep_bytes(&p, *offset)?;
-                let v = self.load_reg(*src, ty)?;
                 let ll = llvm_type(ty, self.structs)?;
                 let al = align_of(ty, self.structs);
-                self.line(&format!("store {ll} {v}, ptr {q}, align {al}"));
+                if is_aggregate(ty) {
+                    // Whole-object store: the source register holds the
+                    // struct value (or a decayed address to copy
+                    // through), mirroring Instr::Load.
+                    let src_ty = self
+                        .fn_state
+                        .as_ref()
+                        .unwrap()
+                        .reg_ty
+                        .get(*src as usize)
+                        .cloned()
+                        .ok_or_else(|| anyhow!("Store source %r{src} out of range"))?;
+                    let v = if is_aggregate(&src_ty) {
+                        let src_addr =
+                            self.fn_state.as_ref().unwrap().reg_addr[*src as usize].clone();
+                        let v = self.fresh();
+                        let _ =
+                            writeln!(self.bodies, "  {v} = load {ll}, ptr {src_addr}, align {al}");
+                        v
+                    } else if src_ty.is_pointer() {
+                        let sp = self.load_reg(*src, &Type::void_ptr())?;
+                        let v = self.fresh();
+                        let _ = writeln!(self.bodies, "  {v} = load {ll}, ptr {sp}, align {al}");
+                        v
+                    } else {
+                        bail!("Store of aggregate type {ty} from scalar register %r{src}");
+                    };
+                    self.line(&format!("store {ll} {v}, ptr {q}, align {al}"));
+                } else {
+                    let v = self.load_reg(*src, ty)?;
+                    self.line(&format!("store {ll} {v}, ptr {q}, align {al}"));
+                }
             }
             Instr::Binop {
                 dest,
@@ -856,13 +1256,40 @@ impl<'a> Emitter<'a> {
             }
             Instr::Convert { dest, src, to } => {
                 if is_aggregate(to) {
-                    bail!("Convert to aggregate type {to} is unsupported");
+                    // Struct value materialization: the source either
+                    // already holds the by-value struct (call result,
+                    // ternary merge) or holds a decayed aggregate
+                    // address to load through.
+                    let src_ty = self
+                        .fn_state
+                        .as_ref()
+                        .unwrap()
+                        .reg_ty
+                        .get(*src as usize)
+                        .cloned()
+                        .ok_or_else(|| anyhow!("Convert source %r{src} out of range"))?;
+                    let ll = llvm_type(to, self.structs)?;
+                    let al = align_of(to, self.structs);
+                    let v = if is_aggregate(&src_ty) {
+                        let src_addr =
+                            self.fn_state.as_ref().unwrap().reg_addr[*src as usize].clone();
+                        let v = self.fresh();
+                        let _ =
+                            writeln!(self.bodies, "  {v} = load {ll}, ptr {src_addr}, align {al}");
+                        v
+                    } else if src_ty.is_pointer() {
+                        let p = self.load_reg(*src, &Type::void_ptr())?;
+                        let v = self.fresh();
+                        let _ = writeln!(self.bodies, "  {v} = load {ll}, ptr {p}, align {al}");
+                        v
+                    } else {
+                        bail!("cannot convert scalar register %r{src} to aggregate {to}");
+                    };
+                    self.store_reg(*dest, &v, to)?;
+                } else {
+                    let v = self.load_reg(*src, to)?;
+                    self.store_reg(*dest, &v, to)?;
                 }
-                let st = self.fn_state.as_ref().unwrap();
-                let have = st.reg_ty[*src as usize].clone();
-                let v = self.load_reg(*src, to)?;
-                self.store_reg(*dest, &v, to)?;
-                let _ = have;
             }
             Instr::Memcpy { dst, src, size } => {
                 let d = self.load_reg(*dst, &Type::void_ptr())?;
@@ -984,100 +1411,223 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_call(&mut self, dest: Option<Reg>, func: &str, args: &[(Reg, ArgKind)]) -> Result<()> {
+        // One rendered LLVM-level argument slot: `ty` is the argument
+        // text (may carry ABI attributes), `bare_ty` the plain type
+        // for the call's function type (LLVM rejects attributes
+        // there), and `val` the value.
+        struct Slot {
+            ty: String,
+            bare_ty: String,
+            val: String,
+        }
+
         // Resolve the signature: module table, then builtins, then a
         // synthesized one from the observed argument types.
         let (ret, sig_params, variadic) = match self.callee_sig(func) {
             Ok(sig) => (sig.ret, Some(sig.params), sig.variadic),
             Err(_) => {
-                let arg_tys = args
-                    .iter()
-                    .map(|(_, k)| match k {
-                        ArgKind::Direct(t) => t.clone(),
-                    })
-                    .collect::<Vec<_>>();
                 let ret = match dest {
                     Some(_) => Type::int(),
                     None => Type::Void,
                 };
-                let decl = format!(
-                    "declare {ret} @{func}({params})",
-                    ret = llvm_type(&ret, self.structs)?,
-                    params = arg_tys
-                        .iter()
-                        .map(|t| llvm_type(t, self.structs))
-                        .collect::<Result<Vec<_>>>()?
-                        .join(", "),
-                );
-                if let Some(prev) = self.extra_decl_names.get(func) {
-                    let _ = prev;
-                    // Same-name redeclaration: keep the first; LLVM
-                    // requires a single declaration. Conflicting shapes
-                    // will fail in llc with a clear message.
-                } else {
-                    self.extra_decl_names.insert(func.to_string());
-                    self.extra_decls.push(decl);
-                }
                 (ret, None, false)
             }
         };
+        let n_fixed = sig_params.as_ref().map_or(0, |ps| ps.len());
 
-        // Materialize arguments (each carries its own target type).
-        let mut vals = Vec::new();
-        for (r, kind) in args {
-            let ty = match kind {
+        // Materialize each argument into its ABI slots. Structs pass
+        // by value: one `i64` per eightbyte piece for INTEGER class, a
+        // `ptr byval` for MEMORY class (also forced for variadic
+        // positions, per the psABI's variadic MEMORY rule).
+        let mut slots: Vec<Slot> = Vec::new();
+        for (i, (r, kind)) in args.iter().enumerate() {
+            let kind_ty = match kind {
                 ArgKind::Direct(t) => t.clone(),
             };
-            vals.push((self.load_reg(*r, &ty)?, ty));
-        }
-
-        let dest = match dest {
-            Some(d) if !ret.is_void() => Some(d),
-            Some(_) => None, // void callee with a dest register: ignore
-            None => None,
-        };
-
-        let ret_ll = llvm_type(&ret, self.structs)?;
-        let assign = match dest {
-            Some(_) => format!("{} = ", self.fresh()),
-            None => String::new(),
-        };
-
-        if variadic {
-            let fixed = sig_params
-                .unwrap_or_default()
-                .iter()
-                .map(|t| llvm_type(t, self.structs))
-                .collect::<Result<Vec<_>>>()?
-                .join(", ");
-            let fixed_va = if fixed.is_empty() {
-                "...".to_string()
+            let ir_ty = sig_params
+                .as_ref()
+                .and_then(|ps| ps.get(i).cloned())
+                .unwrap_or(kind_ty);
+            if is_aggregate(&ir_ty) {
+                let plan = self.abi_plan(&ir_ty)?;
+                let va_position = variadic && i >= n_fixed;
+                if plan.memory || va_position {
+                    let p = self.struct_ptr_of_reg(*r)?;
+                    let ty = self.byval_attr(&ir_ty)?;
+                    slots.push(Slot {
+                        ty,
+                        bare_ty: "ptr".to_string(),
+                        val: p,
+                    });
+                } else {
+                    let p = self.struct_ptr_of_reg(*r)?;
+                    for (j, &w) in plan.pieces.iter().enumerate() {
+                        let q = if j == 0 {
+                            p.clone()
+                        } else {
+                            self.gep_bytes(&p, (8 * j) as i64)?
+                        };
+                        let al = align_of(&ir_ty, self.structs).min(w);
+                        let v = self.fresh();
+                        let _ =
+                            writeln!(self.bodies, "  {v} = load i{}, ptr {q}, align {al}", w * 8);
+                        let z = if w == 8 {
+                            v
+                        } else {
+                            let z = self.fresh();
+                            let _ = writeln!(self.bodies, "  {z} = zext i{} {v} to i64", w * 8);
+                            z
+                        };
+                        slots.push(Slot {
+                            ty: "i64".to_string(),
+                            bare_ty: "i64".to_string(),
+                            val: z,
+                        });
+                    }
+                }
             } else {
-                format!("{fixed}, ...")
-            };
-            let argv = vals
-                .iter()
-                .map(|(v, t)| Ok(format!("{} {}", llvm_type(t, self.structs)?, v)))
-                .collect::<Result<Vec<_>>>()?
-                .join(", ");
-            let _ = writeln!(
-                self.bodies,
-                "  {assign}call {ret_ll} ({fixed_va}) @{func}({argv})"
-            );
-        } else {
-            let argv = vals
-                .iter()
-                .map(|(v, t)| Ok(format!("{} {}", llvm_type(t, self.structs)?, v)))
-                .collect::<Result<Vec<_>>>()?
-                .join(", ");
-            let _ = writeln!(self.bodies, "  {assign}call {ret_ll} @{func}({argv})");
+                let v = self.load_reg(*r, &ir_ty)?;
+                let ty = llvm_type(&ir_ty, self.structs)?;
+                slots.push(Slot {
+                    bare_ty: ty.clone(),
+                    ty,
+                    val: v,
+                });
+            }
         }
 
-        if let (Some(d), false) = (dest, ret.is_void()) {
-            let tmp_name = {
-                let st = self.fn_state.as_ref().unwrap();
-                format!("%t{}", st.tmp - 1)
+        // Return ABI: MEMORY-class struct returns need a hidden
+        // leading sret pointer (the dest register home, or a scratch
+        // alloca when the result is discarded).
+        let (ret_ll, sret_attr) = self.abi_ret(&ret)?;
+        if let Some(attr) = &sret_attr {
+            let home = match dest {
+                Some(d) => self
+                    .fn_state
+                    .as_ref()
+                    .unwrap()
+                    .reg_addr
+                    .get(d as usize)
+                    .cloned()
+                    .ok_or_else(|| anyhow!("call result register %r{d} out of range"))?,
+                None => {
+                    let ll = llvm_type(&ret, self.structs)?;
+                    let al = align_of(&ret, self.structs);
+                    let t = self.fresh();
+                    let _ = writeln!(self.bodies, "  {t} = alloca {ll}, align {al}");
+                    t
+                }
             };
-            self.store_reg(d, &tmp_name, &ret)?;
+            slots.insert(
+                0,
+                Slot {
+                    ty: attr.clone(),
+                    bare_ty: "ptr".to_string(),
+                    val: home,
+                },
+            );
+        }
+
+        // Unknown callees get a declaration synthesized from the
+        // rendered argument types (matching the ABI shape a definition
+        // would emit).
+        let bare_tys: Vec<String> = slots.iter().map(|s| s.bare_ty.clone()).collect();
+        if sig_params.is_none() {
+            let decl = format!(
+                "declare {ret_ll} @{func}({arg_tys})",
+                arg_tys = bare_tys.join(", ")
+            );
+            if !self.extra_decl_names.contains(func) {
+                self.extra_decl_names.insert(func.to_string());
+                self.extra_decls.push(decl);
+            }
+        }
+
+        let fn_ty = match variadic {
+            true if bare_tys.is_empty() => "...".to_string(),
+            true => format!("{}, ...", bare_tys.join(", ")),
+            false => bare_tys.join(", "),
+        };
+        let argv = slots
+            .iter()
+            .map(|s| format!("{} {}", s.ty, s.val))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let has_result = ret_ll != "void" && dest.is_some();
+        let assign = if has_result {
+            format!("{} = ", self.fresh())
+        } else {
+            String::new()
+        };
+        let result_tmp = if has_result {
+            let st = self.fn_state.as_ref().unwrap();
+            Some(format!("%t{}", st.tmp - 1))
+        } else {
+            None
+        };
+        let _ = writeln!(
+            self.bodies,
+            "  {assign}call {ret_ll} ({fn_ty}) @{func}({argv})"
+        );
+
+        // Store the result into the dest register home.
+        if let Some(d) = dest {
+            if ret.is_void() {
+                // Void callee with a dest register: ignore.
+            } else if is_aggregate(&ret) {
+                let plan = self.abi_plan(&ret)?;
+                if plan.memory {
+                    // sret: the home is the buffer, already written —
+                    // unless a scratch alloca was used (discarded
+                    // result), in which case there is no dest home to
+                    // fill because dest was None.
+                } else {
+                    // `ret_ll` is the ABI-level return type ("i64" or
+                    // "{i64, i64}"); the pieces extract from it (two
+                    // eightbytes) or arrive plain (one) and reassemble
+                    // into the register's struct home.
+                    let tmp = result_tmp
+                        .ok_or_else(|| anyhow!("call to @{func} produced no result value"))?;
+                    for (j, &w) in plan.pieces.iter().enumerate() {
+                        let ext = if plan.pieces.len() > 1 {
+                            let ext = self.fresh();
+                            let _ =
+                                writeln!(self.bodies, "  {ext} = extractvalue {ret_ll} {tmp}, {j}");
+                            ext
+                        } else {
+                            tmp.clone()
+                        };
+                        let val = if w == 8 {
+                            ext
+                        } else {
+                            let t = self.fresh();
+                            let _ = writeln!(self.bodies, "  {t} = trunc i64 {ext} to i{}", w * 8);
+                            t
+                        };
+                        let al = align_of(&ret, self.structs).min(w);
+                        let q = if j == 0 {
+                            let st = self.fn_state.as_ref().unwrap();
+                            st.reg_addr[d as usize].clone()
+                        } else {
+                            let q = self.fresh();
+                            let home = {
+                                let st = self.fn_state.as_ref().unwrap();
+                                st.reg_addr[d as usize].clone()
+                            };
+                            let _ = writeln!(
+                                self.bodies,
+                                "  {q} = getelementptr i8, ptr {home}, i64 {}",
+                                8 * j
+                            );
+                            q
+                        };
+                        self.line(&format!("store i{} {val}, ptr {q}, align {al}", w * 8));
+                    }
+                }
+            } else {
+                let tmp = result_tmp.unwrap();
+                self.store_reg(d, &tmp, &ret)?;
+            }
         }
         Ok(())
     }
@@ -1091,6 +1641,22 @@ impl<'a> Emitter<'a> {
             Terminator::Return(None) => {
                 if f.ret.is_void() {
                     self.line("ret void");
+                } else if is_aggregate(&f.ret) {
+                    // Defensive: `return;` in a struct-returning
+                    // function hands back a zeroed object.
+                    if self.abi_plan(&f.ret)?.memory {
+                        let ll = llvm_type(&f.ret, self.structs)?;
+                        let al = align_of(&f.ret, self.structs);
+                        self.line(&format!("store {ll} zeroinitializer, ptr %agg, align {al}"));
+                        self.line("ret void");
+                    } else {
+                        let pieces = self.abi_plan(&f.ret)?.pieces.len();
+                        if pieces == 1 {
+                            self.line("ret i64 0");
+                        } else {
+                            self.line("ret {i64, i64} zeroinitializer");
+                        }
+                    }
                 } else {
                     // Defensive: `return;` in a non-void function.
                     let ll = llvm_type(&f.ret, self.structs)?;
@@ -1100,6 +1666,67 @@ impl<'a> Emitter<'a> {
             Terminator::Return(Some(r)) => {
                 if f.ret.is_void() {
                     self.line("ret void");
+                } else if is_aggregate(&f.ret) {
+                    // By-value struct return. The register carries the
+                    // struct (its home for value registers, a decayed
+                    // address otherwise); the pieces leave per the ABI.
+                    let plan = self.abi_plan(&f.ret)?;
+                    let p = self.struct_ptr_of_reg(*r)?;
+                    let sal = align_of(&f.ret, self.structs);
+                    if plan.memory {
+                        // Copy the object into the hidden sret buffer.
+                        let ll = llvm_type(&f.ret, self.structs)?;
+                        let v = self.fresh();
+                        let _ = writeln!(self.bodies, "  {v} = load {ll}, ptr {p}, align {sal}");
+                        self.line(&format!("store {ll} {v}, ptr %agg, align {sal}"));
+                        self.line("ret void");
+                    } else if plan.pieces.len() == 1 {
+                        let w = plan.pieces[0];
+                        let al = sal.min(w);
+                        let v = self.fresh();
+                        let _ =
+                            writeln!(self.bodies, "  {v} = load i{}, ptr {p}, align {al}", w * 8);
+                        let z = if w == 8 {
+                            v
+                        } else {
+                            let z = self.fresh();
+                            let _ = writeln!(self.bodies, "  {z} = zext i{} {v} to i64", w * 8);
+                            z
+                        };
+                        self.line(&format!("ret i64 {z}"));
+                    } else {
+                        // Two eightbytes: RAX carries the first, RDX the
+                        // second — an LLVM {i64, i64} first-class return.
+                        let mut iv = "undef".to_string();
+                        for (j, &w) in plan.pieces.iter().enumerate() {
+                            let q = if j == 0 {
+                                p.clone()
+                            } else {
+                                self.gep_bytes(&p, (8 * j) as i64)?
+                            };
+                            let al = sal.min(w);
+                            let v = self.fresh();
+                            let _ = writeln!(
+                                self.bodies,
+                                "  {v} = load i{}, ptr {q}, align {al}",
+                                w * 8
+                            );
+                            let z = if w == 8 {
+                                v
+                            } else {
+                                let z = self.fresh();
+                                let _ = writeln!(self.bodies, "  {z} = zext i{} {v} to i64", w * 8);
+                                z
+                            };
+                            let next = self.fresh();
+                            let _ = writeln!(
+                                self.bodies,
+                                "  {next} = insertvalue {{i64, i64}} {iv}, i64 {z}, {j}"
+                            );
+                            iv = next;
+                        }
+                        self.line(&format!("ret {{i64, i64}} {iv}"));
+                    }
                 } else {
                     let v = self.load_reg(*r, &f.ret)?;
                     let ll = llvm_type(&f.ret, self.structs)?;
@@ -1410,7 +2037,7 @@ mod tests {
             "string literal wrong:\n{ll}"
         );
         assert!(
-            ll.contains("@counter = global i32 zeroinitializer, align 4"),
+            ll.contains("@counter = common global i32 zeroinitializer, align 4"),
             "scalar global wrong:\n{ll}"
         );
         assert!(
@@ -1424,7 +2051,7 @@ mod tests {
         assert!(ll.contains("= add i32 "), "binop missing:\n{ll}");
         assert!(ll.contains("ret i32 "), "ret missing:\n{ll}");
         assert!(
-            ll.contains("call i32 (ptr, ...) @printf(ptr "),
+            ll.contains("call i32 (ptr, i32, ...) @printf(ptr "),
             "variadic call wrong:\n{ll}"
         );
     }

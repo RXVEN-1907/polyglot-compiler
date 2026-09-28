@@ -8,7 +8,7 @@
 use crate::{
     ArgKind, BlockId, Function, GlobalInit, GlobalVar, Instr, Module, Reg, SlotId, Terminator,
 };
-use polyglot_core::{IntKind, StructDef, Type};
+use polyglot_core::{BitfieldLayout, IntKind, StructDef, Type};
 use polyglot_sema::FuncSig;
 use polyglot_syntax::ast::*;
 use std::collections::HashMap;
@@ -421,6 +421,182 @@ impl<'a> FnLowerer<'a> {
         d
     }
 
+    // ---- bit-fields ------------------------------------------------------
+
+    /// Bit-field info for the member `base.name`, when it is one.
+    /// Unions and structs share the same field table; the field's
+    /// `offset` is the byte offset of its storage unit.
+    fn member_bitfield(&self, base: &Expr, name: &str) -> Option<BitfieldLayout> {
+        let bt = &base.ty;
+        let sname = match bt.pointee().unwrap_or(bt) {
+            Type::Struct(n) => n.clone(),
+            _ => return None,
+        };
+        let def = self.structs.get(&sname)?;
+        def.fields
+            .iter()
+            .find(|f| f.name == name)?
+            .bitfield
+            .filter(|b| b.width > 0)
+    }
+
+    /// Read a bit-field: load the storage unit, shift the field down
+    /// and mask. The mask after the shift makes the result identical
+    /// for arithmetic or logical `>>`. Signed fields are sign-extended
+    /// with the bias trick (`v - ((v >> (w-1)) & 1) << w`), which stays
+    /// correct under either shift semantics.
+    fn load_bitfield(&mut self, addr: Reg, bf: BitfieldLayout, ty: &Type) -> Reg {
+        let raw = self.func.new_reg();
+        self.emit(Instr::Load {
+            dest: raw,
+            addr,
+            offset: 0,
+            ty: ty.clone(),
+        });
+        let mut val = raw;
+        if bf.lsb > 0 {
+            let lsb = self.const_reg(bf.lsb as i128, ty.clone());
+            let sh = self.func.new_reg();
+            self.emit(Instr::Binop {
+                dest: sh,
+                op: BinOp::Shr,
+                lhs: raw,
+                rhs: lsb,
+                ty: ty.clone(),
+            });
+            val = sh;
+        }
+        let m = self.const_reg(field_mask(bf.width, ty), ty.clone());
+        let masked = self.func.new_reg();
+        self.emit(Instr::Binop {
+            dest: masked,
+            op: BinOp::BitAnd,
+            lhs: val,
+            rhs: m,
+            ty: ty.clone(),
+        });
+        if bf.signed {
+            self.sign_extend(masked, bf.width, ty)
+        } else {
+            masked
+        }
+    }
+
+    /// Sign-extend the low `width` bits of `v` (of type `ty`).
+    fn sign_extend(&mut self, v: Reg, width: u32, ty: &Type) -> Reg {
+        let w1 = self.const_reg((width - 1) as i128, ty.clone());
+        let t = self.func.new_reg();
+        self.emit(Instr::Binop {
+            dest: t,
+            op: BinOp::Shr,
+            lhs: v,
+            rhs: w1,
+            ty: ty.clone(),
+        });
+        let one = self.const_reg(1, ty.clone());
+        let bit = self.func.new_reg();
+        self.emit(Instr::Binop {
+            dest: bit,
+            op: BinOp::BitAnd,
+            lhs: t,
+            rhs: one,
+            ty: ty.clone(),
+        });
+        let w = self.const_reg(width as i128, ty.clone());
+        let adj = self.func.new_reg();
+        self.emit(Instr::Binop {
+            dest: adj,
+            op: BinOp::Shl,
+            lhs: bit,
+            rhs: w,
+            ty: ty.clone(),
+        });
+        let d = self.func.new_reg();
+        self.emit(Instr::Binop {
+            dest: d,
+            op: BinOp::Sub,
+            lhs: v,
+            rhs: adj,
+            ty: ty.clone(),
+        });
+        d
+    }
+
+    /// Write a bit-field with a read-modify-write of its storage unit:
+    /// `unit = (unit & ~field_mask<<lsb) | ((value & mask) << lsb)`.
+    /// Returns the field's stored value (masked, sign-extended for
+    /// signed fields) so assignment expressions yield it as in C.
+    fn store_bitfield(&mut self, addr: Reg, ty: &Type, bf: BitfieldLayout, value: Reg) -> Reg {
+        let unit_bits = ty.size() * 8;
+        let old = self.func.new_reg();
+        self.emit(Instr::Load {
+            dest: old,
+            addr,
+            offset: 0,
+            ty: ty.clone(),
+        });
+        let mask = field_mask(bf.width, ty);
+        // Truncate the value to the field width.
+        let m = self.const_reg(mask, ty.clone());
+        let trunc = self.func.new_reg();
+        self.emit(Instr::Binop {
+            dest: trunc,
+            op: BinOp::BitAnd,
+            lhs: value,
+            rhs: m,
+            ty: ty.clone(),
+        });
+        // Move into position.
+        let placed = if bf.lsb > 0 {
+            let lsb = self.const_reg(bf.lsb as i128, ty.clone());
+            let p = self.func.new_reg();
+            self.emit(Instr::Binop {
+                dest: p,
+                op: BinOp::Shl,
+                lhs: trunc,
+                rhs: lsb,
+                ty: ty.clone(),
+            });
+            p
+        } else {
+            trunc
+        };
+        // Clear the old field bits and merge.
+        let clear_mask = if (bf.width as u64) >= unit_bits {
+            0
+        } else {
+            !(mask << bf.lsb) & ((1i128 << unit_bits) - 1)
+        };
+        let cm = self.const_reg(clear_mask, ty.clone());
+        let cleared = self.func.new_reg();
+        self.emit(Instr::Binop {
+            dest: cleared,
+            op: BinOp::BitAnd,
+            lhs: old,
+            rhs: cm,
+            ty: ty.clone(),
+        });
+        let merged = self.func.new_reg();
+        self.emit(Instr::Binop {
+            dest: merged,
+            op: BinOp::BitOr,
+            lhs: cleared,
+            rhs: placed,
+            ty: ty.clone(),
+        });
+        self.emit(Instr::Store {
+            addr,
+            offset: 0,
+            src: merged,
+            ty: ty.clone(),
+        });
+        if bf.signed && (bf.width as u64) < unit_bits {
+            self.sign_extend(trunc, bf.width, ty)
+        } else {
+            trunc
+        }
+    }
+
     // ---- expressions -----------------------------------------------------
 
     fn lower_expr(&mut self, expr: &Expr) -> anyhow::Result<Reg> {
@@ -469,6 +645,13 @@ impl<'a> FnLowerer<'a> {
             ExprKind::Call { callee, args } => self.lower_call(callee, args, ty),
             ExprKind::Index(..) | ExprKind::Member { .. } => {
                 let (addr, val_ty) = self.lower_addr(expr)?;
+                // Bit-field member read: extract the field from its
+                // storage unit with shifts and masks.
+                if let ExprKind::Member { base, name, .. } = &expr.kind {
+                    if let Some(bf) = self.member_bitfield(base, name) {
+                        return Ok(self.load_bitfield(addr, bf, &val_ty));
+                    }
+                }
                 match val_ty {
                     Type::Array(..) | Type::Struct(_) => Ok(addr),
                     elem => {
@@ -687,6 +870,14 @@ impl<'a> FnLowerer<'a> {
             }
             _ => {
                 let (addr, ty) = self.lower_addr(expr)?;
+                // Bit-field member: load the field value; the store
+                // side knows how to merge back into the unit.
+                if let ExprKind::Member { base, name, .. } = &expr.kind {
+                    if let Some(bf) = self.member_bitfield(base, name) {
+                        let v = self.load_bitfield(addr, bf, &ty);
+                        return Ok((v, LvalueAddr::Bit { addr, ty, bf }));
+                    }
+                }
                 match &ty {
                     Type::Array(..) | Type::Struct(_) => Ok((addr, LvalueAddr::Mem(addr, ty))),
                     elem_ty => {
@@ -704,18 +895,29 @@ impl<'a> FnLowerer<'a> {
         }
     }
 
-    fn store_back(&mut self, loc: LvalueAddr, value: Reg) -> anyhow::Result<()> {
-        match loc {
-            LvalueAddr::Local(slot) => self.emit(Instr::StoreLocal { slot, src: value }),
-            LvalueAddr::Global(name) => self.emit(Instr::StoreGlobal { name, src: value }),
-            LvalueAddr::Mem(addr, ty) => self.emit(Instr::Store {
-                addr,
-                offset: 0,
-                src: value,
-                ty,
-            }),
-        }
-        Ok(())
+    /// Store to an lvalue; returns the value the stored expression
+    /// yields (for bit-fields, the extracted field value).
+    fn store_back(&mut self, loc: LvalueAddr, value: Reg) -> anyhow::Result<Reg> {
+        Ok(match loc {
+            LvalueAddr::Local(slot) => {
+                self.emit(Instr::StoreLocal { slot, src: value });
+                value
+            }
+            LvalueAddr::Global(name) => {
+                self.emit(Instr::StoreGlobal { name, src: value });
+                value
+            }
+            LvalueAddr::Mem(addr, ty) => {
+                self.emit(Instr::Store {
+                    addr,
+                    offset: 0,
+                    src: value,
+                    ty,
+                });
+                value
+            }
+            LvalueAddr::Bit { addr, ty, bf } => self.store_bitfield(addr, &ty, bf, value),
+        })
     }
 
     fn lower_assign(&mut self, op: AssignOp, lhs: &Expr, rhs: &Expr) -> anyhow::Result<Reg> {
@@ -742,13 +944,15 @@ impl<'a> FnLowerer<'a> {
                 self.convert(res, res_ty, lhs_ty.clone())
             }
         };
-        self.store_back(loc, stored)?;
+        // For bit-fields this is the extracted field value, not the
+        // whole merged storage unit.
+        let stored_val = self.store_back(loc, stored)?;
 
         // Assignment expression evaluates to the stored value.
         let out = self.func.new_reg();
         self.emit(Instr::Convert {
             dest: out,
-            src: stored,
+            src: stored_val,
             to: lhs_ty,
         });
         Ok(out)
@@ -1070,6 +1274,14 @@ impl<'a> FnLowerer<'a> {
                                 });
                                 let next = self.new_block();
                                 self.cond_branch(eq, body_blocks[i], next);
+                                // `cond_branch` terminated the block and
+                                // moved to a fresh one; realign with
+                                // `next` so the next check (or the
+                                // fall-out branch) lands exactly on the
+                                // block this branch targets. Without
+                                // this, stacked labels (`case 1: case 2:`)
+                                // branch into an empty block.
+                                self.place(next);
                                 check = next;
                             }
                             None => {
@@ -1207,7 +1419,11 @@ impl<'a> FnLowerer<'a> {
                 self.zero_fill(slot, ty);
                 let base = self.slot_addr(slot);
                 if let Some(def) = self.structs.get(sname) {
-                    for (item, field) in items.iter().zip(def.fields.iter()) {
+                    // Unnamed bit-fields (padding / `:0`) take no
+                    // initializer, so pair items with named fields only.
+                    let named: Vec<&polyglot_core::StructField> =
+                        def.fields.iter().filter(|f| !f.name.is_empty()).collect();
+                    for (item, field) in items.iter().zip(named) {
                         // If field is a struct, initializer item may be a nested list
                         if let Type::Struct(nested_name) = &field.ty {
                             if let Init::List(field_items) = item {
@@ -1235,15 +1451,21 @@ impl<'a> FnLowerer<'a> {
                                 }
                             }
                         } else if let Init::Expr(e) = item {
-                            // Scalar field
+                            // Scalar field (bit-fields merge into their unit).
                             let vr = self.lower_expr(e)?;
                             let vr = self.convert(vr, e.ty.clone(), field.ty.clone());
-                            self.emit(Instr::Store {
-                                addr: base,
-                                offset: field.offset as i64,
-                                src: vr,
-                                ty: field.ty.clone(),
-                            });
+                            match field.bitfield {
+                                Some(bf) if bf.width > 0 => {
+                                    let faddr = self.offset_addr(base, field.offset as i128);
+                                    self.store_bitfield(faddr, &field.ty, bf, vr);
+                                }
+                                _ => self.emit(Instr::Store {
+                                    addr: base,
+                                    offset: field.offset as i64,
+                                    src: vr,
+                                    ty: field.ty.clone(),
+                                }),
+                            }
                         }
                     }
                 }
@@ -1295,6 +1517,24 @@ enum LvalueAddr {
     Local(SlotId),
     Global(String),
     Mem(Reg, Type),
+    /// A bit-field member: its storage unit lives at `addr` (already
+    /// offset), typed `ty`; `bf` locates the bits within the unit.
+    Bit {
+        addr: Reg,
+        ty: Type,
+        bf: BitfieldLayout,
+    },
+}
+
+/// Bit mask covering `width` bits of the unit type `ty` (all ones for
+/// a full-width field).
+fn field_mask(width: u32, ty: &Type) -> i128 {
+    let unit_bits = ty.size() * 8;
+    if width as u64 >= unit_bits {
+        -1
+    } else {
+        (1i128 << width) - 1
+    }
 }
 
 fn usual_arith_type(a: &Type, b: &Type) -> Type {

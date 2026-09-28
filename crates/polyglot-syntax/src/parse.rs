@@ -14,6 +14,23 @@ pub struct Parser {
     /// Struct definitions parsed inside function bodies; drained into
     /// the translation unit by the top-level loop.
     pending_structs: Vec<StructDef>,
+    /// Enum definitions parsed anywhere; drained alongside
+    /// `pending_structs` (constants fold at parse time, so this only
+    /// records the definitions for inspection).
+    pending_enums: Vec<EnumDef>,
+    /// Enumerator name -> value; constants fold to integer literals
+    /// from their declaration point onward (parser-wide, like
+    /// typedefs — block scoping is not modeled).
+    consts: std::collections::HashMap<String, i128>,
+    /// Set by the most recent `parse_base_type`: true when the last
+    /// specifier word was `unsigned` (bit-fields are the only place
+    /// the frontend records signedness).
+    last_base_unsigned: bool,
+    /// Set by the most recent `parse_base_type`: true when an enum
+    /// body was just parsed, so a following `;` ends the declaration.
+    last_was_enum_body: bool,
+    /// Counter for unique anonymous struct/union tag names.
+    anon_counter: usize,
 }
 
 /// Binary operator precedence; higher binds tighter.
@@ -63,6 +80,11 @@ impl Parser {
             pos: 0,
             typedef_map: std::collections::HashMap::new(),
             pending_structs: Vec::new(),
+            pending_enums: Vec::new(),
+            consts: std::collections::HashMap::new(),
+            last_base_unsigned: false,
+            last_was_enum_body: false,
+            anon_counter: 0,
         }
     }
 
@@ -133,6 +155,8 @@ impl Parser {
                         | "signed"
                         | "void"
                         | "struct"
+                        | "union"
+                        | "enum"
                         | "const"
                 ) || self.typedef_map.contains_key(name)
             }
@@ -158,6 +182,7 @@ impl Parser {
             }
             self.parse_top_level_decl(&mut unit, diags);
             unit.structs.append(&mut self.pending_structs);
+            unit.enums.append(&mut self.pending_enums);
         }
         Ok(unit)
     }
@@ -177,13 +202,16 @@ impl Parser {
         }
         self.expect_punct(";", diags);
         unit.structs.append(&mut self.pending_structs);
+        unit.enums.append(&mut self.pending_enums);
     }
 
     fn parse_top_level_decl(&mut self, unit: &mut TranslationUnit, diags: &mut DiagnosticEngine) {
         let start_span = self.peek().span;
         let base = self.parse_base_type(unit, diags);
-        // Bare `struct Point { ... };` definition.
-        if matches!(base, Type::Struct(_)) && self.at_punct(";") {
+        // Bare `struct Point { ... };` / `enum Color { ... };` definition.
+        let ended_enum_body = self.last_was_enum_body;
+        self.last_was_enum_body = false;
+        if (matches!(base, Type::Struct(_)) || ended_enum_body) && self.at_punct(";") {
             self.next();
             return;
         }
@@ -336,7 +364,8 @@ impl Parser {
 
     // ---- types -----------------------------------------------------------
 
-    /// Parse a base type: specifiers plus optional `struct` definition.
+    /// Parse a base type: specifiers plus optional `struct`/`union`/`enum`
+    /// definition.
     fn parse_base_type(
         &mut self,
         unit: &mut TranslationUnit,
@@ -346,12 +375,24 @@ impl Parser {
         let mut has_short = false;
         let mut has_int = false;
         let mut has_char = false;
+        let mut has_sign = false;
         let mut is_void = false;
         let mut result: Option<Type> = None;
+        self.last_base_unsigned = false;
+        self.last_was_enum_body = false;
 
         while let TokenKind::Ident(word) = self.peek_kind().clone() {
             match word.as_str() {
-                "unsigned" | "signed" | "const" => {
+                "unsigned" => {
+                    self.next();
+                    has_sign = true;
+                    self.last_base_unsigned = true;
+                }
+                "signed" => {
+                    self.next();
+                    has_sign = true;
+                }
+                "const" => {
                     self.next();
                 }
                 "long" => {
@@ -376,7 +417,15 @@ impl Parser {
                 }
                 "struct" => {
                     self.next();
-                    result = Some(self.parse_struct_type(unit, diags));
+                    result = Some(self.parse_struct_type(unit, diags, false));
+                }
+                "union" => {
+                    self.next();
+                    result = Some(self.parse_struct_type(unit, diags, true));
+                }
+                "enum" => {
+                    self.next();
+                    result = Some(self.parse_enum_type(diags));
                 }
                 _ => break,
             }
@@ -394,7 +443,9 @@ impl Parser {
         if has_long {
             return Type::long();
         }
-        if has_short || has_int {
+        if has_short || has_int || has_sign {
+            // `unsigned`/`signed` without a sized specifier is `int`
+            // (the frontend has no distinct unsigned types).
             return Type::int();
         }
         // Must be a typedef name.
@@ -409,30 +460,62 @@ impl Parser {
         Type::int()
     }
 
-    /// Parse `Name { fields... }` (definition or use) after `struct`.
+    /// Parse `Name { fields... }` (definition or use) after `struct` or
+    /// `union`; `is_union` selects the kind. Unions are represented as
+    /// struct definitions with every member at offset 0.
     fn parse_struct_type(
         &mut self,
         unit: &mut TranslationUnit,
         diags: &mut DiagnosticEngine,
+        is_union: bool,
     ) -> Type {
-        let (name, _) = self.expect_ident(diags);
-        // eprintln!("[parse] parsing struct {}", name);
+        // Anonymous definitions (`struct { int x; } p;`) get a unique
+        // internal name (containing a `.`, which no identifier can) so
+        // distinct anonymous definitions never collide in the table.
+        let (name, _) = if self.at_punct("{") {
+            self.anon_counter += 1;
+            (format!(".anon{}", self.anon_counter), self.peek().span)
+        } else {
+            self.expect_ident(diags)
+        };
         if self.at_punct("{") {
             self.next();
             let mut fields: Vec<StructField> = Vec::new();
             while !self.at_punct("}") && !matches!(self.peek_kind(), TokenKind::Eof) {
-                // eprintln!("[parse]   parsing field");
                 let base = self.parse_base_type(unit, diags);
+                let base_unsigned = self.last_base_unsigned;
                 loop {
                     let mut pointers = 0usize;
                     while self.eat_punct("*") {
                         pointers += 1;
                     }
-                    let (fname, fspan) = self.expect_ident(diags);
                     let mut fty = base.clone();
                     for _ in 0..pointers {
                         fty = Type::ptr_to(fty);
                     }
+                    // An unnamed bit-field (`int :3;` padding or `int :0;`
+                    // boundary) has no declarator at all.
+                    if self.at_punct(":") {
+                        self.next();
+                        let width = self.parse_bitfield_width(&fty, false, diags);
+                        if let Some(width) = width {
+                            fields.push(StructField {
+                                name: String::new(),
+                                ty: fty,
+                                offset: 0,
+                                bitfield: Some(polyglot_core::BitfieldLayout {
+                                    lsb: 0,
+                                    width,
+                                    signed: false,
+                                }),
+                            });
+                        }
+                        if !self.eat_punct(",") {
+                            break;
+                        }
+                        continue;
+                    }
+                    let (fname, fspan) = self.expect_ident(diags);
                     // Array members.
                     if self.eat_punct("[") {
                         let len_expr = if self.at_punct("]") {
@@ -454,6 +537,18 @@ impl Parser {
                             fty = Type::Array(Box::new(fty), Some(0));
                         }
                     }
+                    // Bit-field width suffix.
+                    let bitfield = if self.eat_punct(":") {
+                        self.parse_bitfield_width(&fty, true, diags).map(|width| {
+                            polyglot_core::BitfieldLayout {
+                                lsb: 0,
+                                width,
+                                signed: !base_unsigned,
+                            }
+                        })
+                    } else {
+                        None
+                    };
                     if !fname.is_empty() {
                         if fields.iter().any(|f| f.name == fname) {
                             diags.push(
@@ -465,6 +560,7 @@ impl Parser {
                                 name: fname,
                                 ty: fty,
                                 offset: 0,
+                                bitfield,
                             });
                         }
                     }
@@ -480,6 +576,7 @@ impl Parser {
                 fields,
                 size: 0,
                 align: 0,
+                is_union,
             };
             // Build a temporary struct table from already-parsed structs for nested struct layout.
             let mut temp_table: HashMap<String, StructDef> = HashMap::new();
@@ -496,8 +593,126 @@ impl Parser {
                 self.pending_structs.push(def);
             }
         }
-        // eprintln!("[parse] done struct {}", name);
         Type::Struct(name)
+    }
+
+    /// Parse the width of a bit-field after the `:`; diagnoses
+    /// non-constant, negative, over-wide and (for named fields)
+    /// zero-width widths. Returns `None` on a hard error (the member
+    /// keeps no bit-field marker).
+    fn parse_bitfield_width(
+        &mut self,
+        ty: &Type,
+        named: bool,
+        diags: &mut DiagnosticEngine,
+    ) -> Option<u32> {
+        let expr = self.parse_conditional(diags);
+        let value = match const_int(&expr) {
+            Some(v) => v,
+            None => {
+                diags.push(
+                    Diagnostic::error(
+                        "E0214",
+                        "bit-field width must be a non-negative integer constant",
+                    )
+                    .at(expr.span, "here"),
+                );
+                return None;
+            }
+        };
+        if value < 0 {
+            diags.push(
+                Diagnostic::error(
+                    "E0214",
+                    "bit-field width must be a non-negative integer constant",
+                )
+                .at(expr.span, "here"),
+            );
+            return None;
+        }
+        let width = value as u32;
+        if u64::from(width) > ty.size() * 8 {
+            diags.push(
+                Diagnostic::error(
+                    "E0216",
+                    format!("bit-field width {width} exceeds the width of `{ty}`"),
+                )
+                .at(expr.span, "here"),
+            );
+            return None;
+        }
+        if width == 0 && named {
+            diags.push(
+                Diagnostic::error("E0215", "zero-width bit-fields must be unnamed")
+                    .at(expr.span, "here"),
+            );
+        }
+        Some(width)
+    }
+
+    /// Parse an `enum` definition or use: `enum Name { A, B = 3, C };`
+    ///
+    /// Constants fold to integer literals at parse time (the same
+    /// model as `#define`); the type itself is the underlying `int`.
+    fn parse_enum_type(&mut self, diags: &mut DiagnosticEngine) -> Type {
+        // Anonymous enums (`enum { A, B } x;`) have no tag.
+        let (tag, _) = if self.at_punct("{") {
+            (String::new(), self.peek().span)
+        } else {
+            self.expect_ident(diags)
+        };
+        if self.at_punct("{") {
+            self.next();
+            let mut constants: Vec<(String, i128)> = Vec::new();
+            let mut next_value: i128 = 0;
+            while !self.at_punct("}") && !matches!(self.peek_kind(), TokenKind::Eof) {
+                let (cname, cspan) = self.expect_ident(diags);
+                let value = if self.eat_punct("=") {
+                    let expr = self.parse_conditional(diags);
+                    match const_int(&expr) {
+                        Some(v) => v,
+                        None => {
+                            diags.push(
+                                Diagnostic::error(
+                                    "E0213",
+                                    "enumerator value must be an integer constant",
+                                )
+                                .at(expr.span, "here"),
+                            );
+                            0
+                        }
+                    }
+                } else {
+                    next_value
+                };
+                next_value = value.wrapping_add(1);
+                if !cname.is_empty() {
+                    if self.consts.contains_key(&cname) {
+                        diags.push(
+                            Diagnostic::error(
+                                "E0212",
+                                format!("redefinition of enumerator `{cname}`"),
+                            )
+                            .at(cspan, "here"),
+                        );
+                    } else {
+                        self.consts.insert(cname.clone(), value);
+                    }
+                    constants.push((cname, value));
+                }
+                if !self.eat_punct(",") {
+                    break;
+                }
+            }
+            self.expect_punct("}", diags);
+            self.last_was_enum_body = true;
+            self.pending_enums.push(EnumDef {
+                name: tag,
+                constants,
+            });
+        }
+        // Enums behave as their underlying int throughout the frontend.
+        Type::int()
     }
 
     /// Wrap `base` in pointer levels parsed before an identifier.
@@ -773,6 +988,14 @@ impl Parser {
         let mut scratch = TranslationUnit::default();
         // Re-use the main typedef table through `self`.
         let base = self.parse_base_type_with(&mut scratch, diags);
+        let ended_enum_body = self.last_was_enum_body;
+        self.last_was_enum_body = false;
+        // A bare `struct P { ... };` / `union U { ... };` /
+        // `enum E { ... };` definition inside a block declares no
+        // variables.
+        if (matches!(base, Type::Struct(_)) || ended_enum_body) && self.eat_punct(";") {
+            return Vec::new();
+        }
         let mut decls: Vec<Stmt> = Vec::new();
         loop {
             let mut pointers = 0usize;
@@ -1128,7 +1351,13 @@ impl Parser {
             }
             TokenKind::Ident(name) => {
                 self.next();
-                Expr::new(ExprKind::Var(name), span)
+                // Enumerator constants fold to integer literals (same
+                // model as object-like macros).
+                if let Some(&v) = self.consts.get(&name) {
+                    Expr::new(ExprKind::IntLit(v, Suffix::None), span)
+                } else {
+                    Expr::new(ExprKind::Var(name), span)
+                }
             }
             other => {
                 diags.push(unexpected(&other, span, "an expression"));
@@ -1191,6 +1420,52 @@ impl Parser {
 fn const_array_len(expr: &Expr) -> Option<u64> {
     match &expr.kind {
         ExprKind::IntLit(v, _) if *v >= 0 => Some(*v as u64),
+        _ => None,
+    }
+}
+
+/// Evaluate a parser-level integer constant expression (enumerator
+/// values, bit-field widths). Same semantics as `sema::const_eval`:
+/// wrapping two's-complement arithmetic on `i128`.
+fn const_int(expr: &Expr) -> Option<i128> {
+    match &expr.kind {
+        ExprKind::IntLit(v, _) => Some(*v),
+        ExprKind::Unary(UnOp::Neg, inner) => const_int(inner).map(|v| v.wrapping_neg()),
+        ExprKind::Unary(UnOp::BitNot, inner) => const_int(inner).map(|v| !v),
+        ExprKind::Unary(UnOp::Not, inner) => const_int(inner).map(|v| (v == 0) as i128),
+        ExprKind::Binary(op, l, r) => {
+            let (l, r) = (const_int(l)?, const_int(r)?);
+            Some(match op {
+                BinOp::Add => l.wrapping_add(r),
+                BinOp::Sub => l.wrapping_sub(r),
+                BinOp::Mul => l.wrapping_mul(r),
+                BinOp::Div => {
+                    if r == 0 {
+                        return None;
+                    }
+                    l / r
+                }
+                BinOp::Mod => {
+                    if r == 0 {
+                        return None;
+                    }
+                    l % r
+                }
+                BinOp::Shl => l.wrapping_shl(r as u32),
+                BinOp::Shr => l.wrapping_shr(r as u32),
+                BinOp::BitAnd => l & r,
+                BinOp::BitXor => l ^ r,
+                BinOp::BitOr => l | r,
+                BinOp::Eq => (l == r) as i128,
+                BinOp::Ne => (l != r) as i128,
+                BinOp::Lt => (l < r) as i128,
+                BinOp::Gt => (l > r) as i128,
+                BinOp::Le => (l <= r) as i128,
+                BinOp::Ge => (l >= r) as i128,
+                BinOp::LAnd => ((l != 0) && (r != 0)) as i128,
+                BinOp::LOr => ((l != 0) || (r != 0)) as i128,
+            })
+        }
         _ => None,
     }
 }

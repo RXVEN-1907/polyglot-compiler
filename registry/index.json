@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "description": "Official polyglot plugin registry index",
+  "plugins": [
+    {
+      "name": "clang",
+      "plugin": "polyglot-clang",
+      "version": "0.1.0",
+      "description": "C/C++ frontend via Clang",
+      "author": "Polyglot Team",
+      "license": "MIT",
+      "repository": "https://github.com/RXVEN-1907/polyglot-compiler",
+      "path": "plugins/polyglot-clang",
+      "keywords": ["c", "c++", "clang", "llvm"]
+    }
+  ]
+}

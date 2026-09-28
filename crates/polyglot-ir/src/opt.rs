@@ -231,13 +231,36 @@ fn fold_unop(op: crate::UnOp, v: i128, ty: &Type) -> i128 {
 // ---- pass 2: simplification + propagation -------------------------------
 
 fn simplify(f: &mut Function, stats: &mut OptStats) {
+    // Loads eliminated as redundant after a store of the same slot:
+    // `(removed load register, replacement register)`. Their uses may
+    // live in other blocks (e.g. a switch dispatch chain reading the
+    // scrutinee), so they are rewritten with a function-wide sweep
+    // below. Registers are single-definition and the replacement is
+    // defined before the load in the same block, so it dominates every
+    // use the load had.
+    let mut removed_loads: Vec<(Reg, Reg)> = Vec::new();
     for block in &mut f.blocks {
         let slot_addrof: Vec<bool> = f.slots.iter().map(|s| s.addrof).collect();
-        simplify_block(block, &slot_addrof, stats);
+        simplify_block(block, &slot_addrof, stats, &mut removed_loads);
+    }
+    if !removed_loads.is_empty() {
+        let map: std::collections::HashMap<Reg, Reg> = removed_loads.into_iter().collect();
+        let mut rewrite = |r: Reg| *map.get(&r).unwrap_or(&r);
+        for block in &mut f.blocks {
+            for instr in &mut block.instrs {
+                Function::map_uses(instr, &mut rewrite);
+            }
+            block.term.map_uses(&mut rewrite);
+        }
     }
 }
 
-fn simplify_block(block: &mut crate::Block, slot_addrof: &[bool], stats: &mut OptStats) {
+fn simplify_block(
+    block: &mut crate::Block,
+    slot_addrof: &[bool],
+    stats: &mut OptStats,
+    removed_loads: &mut Vec<(Reg, Reg)>,
+) {
     // reg -> replacement (const value or other reg)
     let mut const_env: std::collections::HashMap<Reg, i128> = std::collections::HashMap::new();
     let mut copy_env: std::collections::HashMap<Reg, Reg> = std::collections::HashMap::new();
@@ -368,7 +391,9 @@ fn simplify_block(block: &mut crate::Block, slot_addrof: &[bool], stats: &mut Op
                 if let Some(&stored) = last_store.get(slot) {
                     if !slot_addrof[*slot as usize] {
                         copy_env.insert(*dest, stored);
-                        // Remove the redundant load entirely.
+                        // The load is redundant; remove it and remember
+                        // the rewrite for uses in other blocks too.
+                        removed_loads.push((*dest, stored));
                         block.instrs.remove(i);
                         stats.instrs_simplified += 1;
                         continue;

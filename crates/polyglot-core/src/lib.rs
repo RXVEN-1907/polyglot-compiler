@@ -11,4 +11,4 @@ pub mod ty;
 
 pub use diag::{Diagnostic, DiagnosticEngine, Label, Severity};
 pub use span::{SourceFile, Span};
-pub use ty::{IntKind, StructDef, StructField, Type};
+pub use ty::{BitfieldLayout, IntKind, StructDef, StructField, Type};

@@ -14,3 +14,4 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tar = "0.4"
+toml = { workspace = true }

@@ -55,6 +55,10 @@ struct FnCtx<'a> {
     funcs: &'a mut HashMap<String, FuncSig>,
     structs: &'a HashMap<String, StructDef>,
     globals: &'a HashMap<String, Type>,
+    /// All enumerator names in the unit: they share the ordinary
+    /// identifier namespace, so declaring a variable with one of these
+    /// names is a redeclaration.
+    enumerators: &'a std::collections::HashSet<String>,
 }
 
 pub fn check(
@@ -62,7 +66,14 @@ pub fn check(
     diags: &mut DiagnosticEngine,
 ) -> anyhow::Result<CheckedProgram> {
     // eprintln!("[sema] check: {} structs, {} funcs, {} globals", unit.structs.len(), unit.funcs.len(), unit.globals.len());
-    // 1. Struct table.
+    // 1. Struct table. (Layout — including unions and bit-fields — is
+    // computed by `StructDef::layout`; the checker's table is the
+    // authoritative one because it sees every definition.)
+    let enumerators: std::collections::HashSet<String> = unit
+        .enums
+        .iter()
+        .flat_map(|e| e.constants.iter().map(|(n, _)| n.clone()))
+        .collect();
     let mut structs: HashMap<String, StructDef> = HashMap::new();
     for def in unit.structs.drain(..) {
         let mut def = def;
@@ -119,6 +130,15 @@ pub fn check(
     let mut global_infos: Vec<GlobalInfo> = Vec::new();
     for g in &unit.globals {
         let ty = resolve_global_type(g, &structs, diags);
+        if enumerators.contains(&g.name) {
+            diags.push(
+                Diagnostic::error(
+                    "E0349",
+                    format!("global `{}` redeclares enumerator `{0}`", g.name),
+                )
+                .at(g.span, "here"),
+            );
+        }
         if global_types.contains_key(&g.name) {
             diags.push(
                 Diagnostic::error("E0304", format!("redefinition of global `{}`", g.name))
@@ -165,6 +185,15 @@ pub fn check(
                         .at(f.span, "here"),
                 );
             }
+            if enumerators.contains(&p.name) {
+                diags.push(
+                    Diagnostic::error(
+                        "E0349",
+                        format!("parameter `{}` redeclares an enumerator", p.name),
+                    )
+                    .at(f.span, "here"),
+                );
+            }
         }
         scopes.push(param_scope);
         let mut ctx = FnCtx {
@@ -177,6 +206,7 @@ pub fn check(
             funcs: &mut funcs,
             structs: &structs,
             globals: &global_types,
+            enumerators: &enumerators,
         };
         ctx.check_block(body);
         // Non-void function that can fall off the end: warning only.
@@ -271,6 +301,15 @@ impl<'a> FnCtx<'a> {
                 .note(prev_span, "previous declaration"),
             );
         } else {
+            if self.enumerators.contains(name) {
+                self.diags.push(
+                    Diagnostic::error(
+                        "E0349",
+                        format!("declaration of `{name}` redeclares an enumerator"),
+                    )
+                    .at(span, "here"),
+                );
+            }
             scope.insert(name.to_string(), LocalSym { ty, span });
         }
     }
@@ -542,11 +581,14 @@ impl<'a> FnCtx<'a> {
                     );
                     return;
                 };
-                if items.len() > def.fields.len() {
+                // Unnamed bit-fields (padding / `:0`) take no initializer.
+                let named: Vec<&polyglot_core::StructField> =
+                    def.fields.iter().filter(|f| !f.name.is_empty()).collect();
+                if items.len() > named.len() {
                     self.diags
                         .push(Diagnostic::error("E0322", "too many initializers").at(span, "here"));
                 }
-                for (item, field) in items.iter_mut().zip(&def.fields) {
+                for (item, field) in items.iter_mut().zip(&named) {
                     self.check_init(item, &field.ty, span);
                 }
             }
@@ -791,6 +833,7 @@ impl<'a> FnCtx<'a> {
                                 .at(inner.span, "here"),
                             );
                         }
+                        self.reject_address_of_bitfield(inner);
                         expr.ty = Type::ptr_to(inner.ty.clone());
                     }
                 }
@@ -1037,6 +1080,45 @@ impl<'a> FnCtx<'a> {
             },
             Type::Array(elem, len) => len.unwrap_or(0) * self.type_size(elem),
             other => other.size(),
+        }
+    }
+
+    /// `&s.f` is invalid when `f` is a bit-field (C11 6.5.3.2p3);
+    /// mirror that diagnostic so lowering never has to handle it.
+    fn reject_address_of_bitfield(&mut self, member: &Expr) {
+        let ExprKind::Member { base, name, arrow } = &member.kind else {
+            return;
+        };
+        let sname = if *arrow {
+            match &base.ty {
+                Type::Pointer(inner) => match &**inner {
+                    Type::Struct(n) => Some(n.clone()),
+                    _ => None,
+                },
+                _ => None,
+            }
+        } else {
+            match &base.ty {
+                Type::Struct(n) => Some(n.clone()),
+                _ => None,
+            }
+        };
+        let Some(sname) = sname else { return };
+        let Some(def) = self.structs.get(&sname) else {
+            return;
+        };
+        if def
+            .fields
+            .iter()
+            .any(|f| f.name == *name && f.bitfield.is_some())
+        {
+            self.diags.push(
+                Diagnostic::error(
+                    "E0348",
+                    format!("cannot take the address of bit-field `{sname}.{name}`"),
+                )
+                .at(member.span, "here"),
+            );
         }
     }
 }

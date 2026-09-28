@@ -47,21 +47,114 @@ pub fn run_simple_driver(cli: Cli) -> Result<()> {
     Ok(())
 }
 
-/// `polyglot build <src.c> -o out`: full in-process pipeline
-/// (parse -> check -> lower -> optimize). With the default `--backend
-/// ir` the artifact is textual Polyglot IR; with `--backend native` the
-/// optimized module is emitted to a real object file via `llc` and
-/// linked to an executable with the system `cc` (single source file
-/// only — multi-TU builds are not supported yet).
+/// `polyglot build <src.c> [more.c ...] -o out`: the full in-process
+/// pipeline (parse -> check -> lower -> optimize) per translation
+/// unit. With the default `--backend ir` the artifact is textual
+/// Polyglot IR; with `--backend native` each optimized module is
+/// emitted to a real object file via `llc` and all objects are linked
+/// to an executable with the system `cc`. Cross-TU calls resolve
+/// through the declarations each TU sees (headers or prototypes);
+/// tentative global definitions merge via COMMON symbols.
 fn handle_build(args: BuildArgs, cli: &Cli) -> Result<()> {
-    let source = args
-        .path
-        .ok_or_else(|| anyhow::anyhow!("build requires a source file (polyglot build <src.c>)"))?;
-    if !source.is_file() {
-        anyhow::bail!("no such source file: {}", source.display());
+    if args.path.is_empty() {
+        anyhow::bail!("build requires a source file (polyglot build <src.c> [more.c ...])");
+    }
+    for source in &args.path {
+        if !source.is_file() {
+            anyhow::bail!("no such source file: {}", source.display());
+        }
     }
 
-    let output = cli.output.clone().unwrap_or_else(|| match args.backend {
+    if args.path.len() == 1 {
+        let source = args.path[0].clone();
+        return build_single(source, args.backend, cli);
+    }
+
+    match args.backend {
+        BackendArg::Ir => {
+            if let Some(output) = &cli.output {
+                anyhow::bail!(
+                    "--output {} cannot name a single artifact for {} source files; \
+                     omit it (each source writes <stem>.pgir) or build one file at a time",
+                    output.display(),
+                    args.path.len()
+                );
+            }
+            for source in &args.path {
+                let output = source.with_extension("pgir");
+                let compiled = pipeline::compile_to_ir(
+                    source,
+                    &cli.include_dirs,
+                    pipeline::map_opt_level(cli.opt_level),
+                )?;
+                pipeline::emit_warnings(&compiled.diags, &compiled.source);
+                std::fs::write(&output, &compiled.ir)
+                    .with_context(|| format!("cannot write {}", output.display()))?;
+                let stats = &compiled.stats;
+                println!(
+                    "compiled {} -> {} ({} functions, {} globals, {} -> {} IR instructions, opt removed {})",
+                    source.display(),
+                    output.display(),
+                    compiled.funcs,
+                    compiled.globals,
+                    stats.instrs_before,
+                    stats.instrs_after,
+                    stats.total_removed(),
+                );
+            }
+            Ok(())
+        }
+        BackendArg::Native => {
+            let output = cli.output.clone().unwrap_or_else(|| PathBuf::from("a.out"));
+            // Each TU compiles to an object in a scratch directory;
+            // only the linked executable lands at the output.
+            let temp = tempfile::tempdir()
+                .context("cannot create a temporary directory for object code")?;
+            let mut objects: Vec<PathBuf> = Vec::new();
+            for source in &args.path {
+                let compiled = pipeline::compile_to_ir(
+                    source,
+                    &cli.include_dirs,
+                    pipeline::map_opt_level(cli.opt_level),
+                )?;
+                pipeline::emit_warnings(&compiled.diags, &compiled.source);
+                let stats = &compiled.stats;
+                let stem = sanitize_stem(source);
+                let obj_path = temp.path().join(format!("{stem}.o"));
+                polyglot_codegen::emit_object(
+                    &compiled.module,
+                    &obj_path,
+                    &source.to_string_lossy(),
+                )
+                .with_context(|| {
+                    format!("native code generation failed for {}", source.display())
+                })?;
+                println!(
+                    "compiled {} -> {} ({} functions, {} globals, {} -> {} IR instructions, opt removed {})",
+                    source.display(),
+                    obj_path.display(),
+                    compiled.funcs,
+                    compiled.globals,
+                    stats.instrs_before,
+                    stats.instrs_after,
+                    stats.total_removed(),
+                );
+                objects.push(obj_path);
+            }
+            link_executable(&objects, &output)?;
+            println!(
+                "linked {} object file(s) -> {}",
+                objects.len(),
+                output.display()
+            );
+            Ok(())
+        }
+    }
+}
+
+/// Single-source build: the classic behavior, unchanged.
+fn build_single(source: PathBuf, backend: BackendArg, cli: &Cli) -> Result<()> {
+    let output = cli.output.clone().unwrap_or_else(|| match backend {
         BackendArg::Ir => source.with_extension("pgir"),
         BackendArg::Native => default_native_output(&source),
     });
@@ -74,7 +167,7 @@ fn handle_build(args: BuildArgs, cli: &Cli) -> Result<()> {
     pipeline::emit_warnings(&compiled.diags, &compiled.source);
 
     let stats = &compiled.stats;
-    match args.backend {
+    match backend {
         BackendArg::Ir => {
             std::fs::write(&output, &compiled.ir)
                 .with_context(|| format!("cannot write {}", output.display()))?;
@@ -91,7 +184,7 @@ fn handle_build(args: BuildArgs, cli: &Cli) -> Result<()> {
                 &source.to_string_lossy(),
             )
             .with_context(|| format!("native code generation failed for {}", source.display()))?;
-            link_executable(&obj, &output)?;
+            link_executable(std::slice::from_ref(&obj), &output)?;
         }
     }
 
@@ -108,6 +201,31 @@ fn handle_build(args: BuildArgs, cli: &Cli) -> Result<()> {
     Ok(())
 }
 
+/// Collision-free object-file stem for a source path
+/// (`dir/a/main.c` -> `main`); duplicates get their index appended by
+/// the caller if they ever matter.
+fn sanitize_stem(source: &Path) -> String {
+    let stem = source
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "module".to_string());
+    let cleaned: String = stem
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        "module".to_string()
+    } else {
+        cleaned
+    }
+}
+
 /// Default executable path for a native build: the source without its
 /// extension (`01_hello.c` -> `01_hello`).
 fn default_native_output(source: &Path) -> PathBuf {
@@ -119,13 +237,13 @@ fn default_native_output(source: &Path) -> PathBuf {
     }
 }
 
-/// Link one object file into an executable with the system linker
+/// Link object files into an executable with the system linker
 /// driver (`cc`, falling back to `gcc`).
-fn link_executable(obj: &Path, output: &Path) -> Result<()> {
+fn link_executable(objs: &[PathBuf], output: &Path) -> Result<()> {
     let cc = find_link_driver()
         .ok_or_else(|| anyhow::anyhow!("no linker driver found (need 'cc' or 'gcc' on PATH)"))?;
     let status = std::process::Command::new(&cc)
-        .arg(obj)
+        .args(objs)
         .arg("-o")
         .arg(output)
         .status()

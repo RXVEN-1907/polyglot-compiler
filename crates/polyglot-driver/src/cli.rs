@@ -50,8 +50,9 @@ pub struct Cli {
 
 #[derive(Subcommand, Clone)]
 pub enum Commands {
-    /// Compile a C source file (to a textual IR artifact, or fully
-    /// native with --backend native)
+    /// Compile one or more C source files (to textual IR artifacts, or
+    /// fully native with --backend native, which compiles each
+    /// translation unit and links them together)
     Build(BuildArgs),
 
     /// Parse and type-check a C source file, printing diagnostics
@@ -75,9 +76,9 @@ pub enum Commands {
 
 #[derive(Parser, Clone)]
 pub struct BuildArgs {
-    /// Source file(s) or project directory
+    /// Source file(s) to compile
     #[arg(value_name = "PATH")]
-    pub path: Option<PathBuf>,
+    pub path: Vec<PathBuf>,
 
     /// Code generation backend
     #[arg(long, value_enum, default_value = "ir", value_name = "BACKEND")]
@@ -162,8 +163,9 @@ pub enum BackendArg {
     #[value(name = "ir")]
     Ir,
     /// Native executable: the same frontend pipeline, then LLVM object
-    /// emission via `llc` and linking via the system `cc`. Single
-    /// source file only — no multi-TU linking yet.
+    /// emission via `llc` and linking via the system `cc`. Multiple
+    /// source files compile as separate translation units and link
+    /// together.
     #[value(name = "native")]
     Native,
 }

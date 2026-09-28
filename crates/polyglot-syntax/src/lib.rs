@@ -14,7 +14,9 @@ pub mod lex;
 pub mod parse;
 pub mod preprocess;
 
-pub use ast::{Expr, ExprKind, FunctionDef, GlobalDef, Param, Stmt, TranslationUnit, TypeRef};
+pub use ast::{
+    EnumDef, Expr, ExprKind, FunctionDef, GlobalDef, Param, Stmt, TranslationUnit, TypeRef,
+};
 pub use lex::{Token, TokenKind};
 pub use preprocess::preprocess;
 
