@@ -112,6 +112,17 @@ PASS_THROUGH_CMDS = {name for name, entry in commands.COMMANDS.items()
                      if entry["pass_through"]}
 
 
+# Options that consume a separate value token. When one of these appears
+# before the subcommand, its value must not be mistaken for the command name
+# (e.g. the 'size' in '--opt-level size build ...' vs the 'size' command).
+VALUE_FLAGS = {
+    "--target", "--opt-level", "-o", "--output",
+    "--plugin", "--plugin-dir", "--compiler",
+    "--std", "--warn", "--sanitize",
+    "-I", "-D", "--cc-arg", "-L", "-l",
+}
+
+
 def _find_subcommand(argv):
     """Index of the first token naming a known subcommand.
 
@@ -119,9 +130,14 @@ def _find_subcommand(argv):
     skipping flags) keeps value-taking flags like `-I dir` or `--cc-arg x`
     from being mistaken for the subcommand when they appear before it.
     """
-    for i, tok in enumerate(argv):
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
         if tok in commands.COMMANDS:
             return i
+        # '--flag=value' carries its value in the same token; a bare flag
+        # consumes the next token, so skip both.
+        i += 2 if tok in VALUE_FLAGS else 1
     return None
 
 
