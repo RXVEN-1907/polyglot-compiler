@@ -54,7 +54,10 @@ def resolve_build_inputs(args):
         if not f.exists():
             raise PolyglotError("Source file not found: %s" % f)
         if f.is_dir():
-            raise PolyglotError("Expected source file, got directory: %s" % f)
+            raise PolyglotError(
+                "Expected source file, got directory: %s (a directory builds "
+                "as a project only when it contains a polyglot.toml; otherwise "
+                "pass the .c files explicitly: polyglot build %s/*.c)" % (f, f))
         sources.append(f)
 
     if output is None:

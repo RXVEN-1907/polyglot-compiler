@@ -150,9 +150,10 @@ class ComprehensiveTest:
 
     def test_version(self):
         """Test version command."""
+        from polyglot_lib import VERSION
         result = self.run(["version"])
         assert result.returncode == 0
-        assert "polyglot 0.2.0" in result.stdout
+        assert f"polyglot {VERSION}" in result.stdout
         print("✓ test_version passed")
 
     def test_cross_compilation(self):

@@ -6,11 +6,11 @@ use crate::cli::{
     TransmuteInternalArgs,
 };
 use crate::pipeline;
+use anyhow::{Context, Result};
 use polyglot_core::{DiagnosticEngine, SourceFile};
 use polyglot_ir::print::print_module;
 use polyglot_sema;
 use polyglot_syntax;
-use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use target_lexicon::Triple;
 use tracing::{info, Level};
@@ -470,7 +470,10 @@ fn handle_transmute_internal(args: TransmuteInternalArgs, cli: &Cli) -> Result<(
     println!("; === STATISTICS ===");
     println!("; Functions: {}", module.funcs.len());
     println!("; Global variables: {}", module.globals.len());
-    println!("; Instructions before optimization: {}", stats.instrs_before);
+    println!(
+        "; Instructions before optimization: {}",
+        stats.instrs_before
+    );
     println!("; Instructions after optimization: {}", stats.instrs_after);
     println!("; Instructions removed: {}", stats.total_removed());
     println!("; Constants folded: {}", stats.constants_folded);

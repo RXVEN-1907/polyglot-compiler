@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "polyglot-driver"
+version = "0.3.0"
+description = "Polyglot - universal C/C++ compiler driver: build, run, check, IR/ASM emission, analysis and caching over clang or GCC toolchains"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Viswajeet", email = "viswajeet2502@gmail.com"},
+]
+dependencies = [
+    "toml>=0.10",
+]
+
+[project.urls]
+Homepage = "https://github.com/RXVEN-1907/polyglot-compiler"
+Repository = "https://github.com/RXVEN-1907/polyglot-compiler"
+
+[project.scripts]
+polyglot = "polyglot_lib.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["polyglot_lib*"]

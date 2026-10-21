@@ -6,6 +6,11 @@
 # plus the 'polyglot_lib' package directory it imports (copied alongside).
 # No superuser privileges are required.
 #
+# Alternative install route: with pipx available, you can install the driver
+# as a proper Python package instead:
+#
+#   pipx install git+https://github.com/RXVEN-1907/polyglot-compiler
+#
 # Usage:
 #   ./install.sh [--prefix DIR] [--yes]       install
 #   ./install.sh --uninstall [--prefix DIR]   remove the installed driver
@@ -40,6 +45,10 @@ die()  { printf 'ERROR: %s\n' "$1" >&2; exit "${2:-1}"; }
 usage() {
   cat <<EOF
 install.sh - install the Polyglot compiler driver ('polyglot')
+
+Alternative (pipx): install the driver as a Python package instead:
+
+  pipx install git+https://github.com/RXVEN-1907/polyglot-compiler
 
 Usage:
   install.sh [--prefix DIR] [--yes]      install the driver

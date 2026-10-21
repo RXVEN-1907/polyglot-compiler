@@ -1,6 +1,6 @@
 [package]
 name = "polyglot-clang"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
 description = "Polyglot Clang plugin - C/C++ frontend via Clang"

@@ -1,0 +1,25 @@
+int main ()
+{
+  int D.2564;
+
+  {
+    printf ("Hello, Polyglot!\n");
+    D.2564 = 0;
+    return D.2564;
+  }
+  D.2564 = 0;
+  return D.2564;
+}
+
+
+__attribute__((artificial, gnu_inline, always_inline))
+__attribute__((nonnull (1), format (printf, 1, 2)))
+int printf (const char * restrict __fmt)
+{
+  int D.2566;
+
+  D.2566 = __printf_chk (2, __fmt, __builtin_va_arg_pack ());
+  return D.2566;
+}
+
+
