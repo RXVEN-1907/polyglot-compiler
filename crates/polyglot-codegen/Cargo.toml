@@ -3,23 +3,15 @@ name = "polyglot-codegen"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Polyglot codegen - MLIR to Cranelift to machine code"
+description = "Polyglot codegen - polyglot-ir to LLVM IR to object files"
 
 [dependencies]
 anyhow = { workspace = true }
 polyglot-core = { workspace = true }
 polyglot-ir = { workspace = true }
-cranelift = { workspace = true }
-cranelift-codegen = { workspace = true }
-cranelift-module = { workspace = true }
-cranelift-object = { workspace = true }
-cranelift-preopt = { workspace = true }
-mlir-sys = { workspace = true }
-polyglot-mlir = { path = "../polyglot-mlir" }
 target-lexicon = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-object = "0.38"
 
 [dev-dependencies]
 polyglot-syntax = { workspace = true }

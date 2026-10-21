@@ -1,9 +1,8 @@
 # Rust
 /target/
 **/*.rs.bk
-# Track the lockfile: polyglot-driver/polyglot-clang are binaries and CI keys its
-# cargo cache off this file.
-Cargo.lock
+# Cargo.lock IS tracked: polyglot-driver/polyglot-clang are binaries, and CI
+# keys its cargo cache off this file.
 
 # Python
 __pycache__/
