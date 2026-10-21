@@ -3,8 +3,13 @@
 
 use crate::cli::{
     BackendArg, BuildArgs, CheckArgs, Cli, Commands, EmitIrArgs, InitArgs, IrFormatArg, RunArgs,
+    TransmuteInternalArgs,
 };
 use crate::pipeline;
+use polyglot_core::{DiagnosticEngine, SourceFile};
+use polyglot_ir::print::print_module;
+use polyglot_sema;
+use polyglot_syntax;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use target_lexicon::Triple;
@@ -41,6 +46,9 @@ pub fn run_simple_driver(cli: Cli) -> Result<()> {
         }
         Commands::Plugin(_) => {
             println!("Plugin management not yet implemented in simple driver");
+        }
+        Commands::TransmuteInternal(args) => {
+            handle_transmute_internal(args, &cli)?;
         }
     }
 
@@ -309,6 +317,181 @@ fn handle_emit_ir(args: EmitIrArgs, cli: &Cli) -> Result<()> {
     } else {
         print!("{}", text);
     }
+    Ok(())
+}
+
+// `polyglot transmute-internal <src.c>`: show the step-by-step compilation
+// process with explanations of each stage.
+fn handle_transmute_internal(args: TransmuteInternalArgs, cli: &Cli) -> Result<()> {
+    if !args.path.is_file() {
+        anyhow::bail!("no such source file: {}", args.path.display());
+    }
+
+    // Show the compilation process step by step
+    println!("; polyglot transmute-internal: {}", args.path.display());
+    println!("; showing the step-by-step compilation process");
+    println!();
+
+    // Step 1: Source code
+    println!("; === STEP 1: SOURCE CODE ===");
+    println!("; The original C/C++ source code as written by the programmer");
+    println!();
+    let source_code = std::fs::read_to_string(&args.path)?;
+    for (i, line) in source_code.lines().enumerate() {
+        println!("; {:>4}: {}", i + 1, line);
+    }
+    println!();
+
+    // Step 2: After parsing (AST)
+    println!("; === STEP 2: AFTER PARSING (AST) ===");
+    println!("; The source code has been parsed into an Abstract Syntax Tree");
+    println!("; This shows the syntactic structure of the program");
+    println!();
+
+    // We'll get the parsed unit from parse_and_check but don't check yet
+    let mut diags = DiagnosticEngine::new();
+    let source_text = std::fs::read_to_string(&args.path)?;
+    let (source_file, unit) = match polyglot_syntax::parse_source(
+        &args.path,
+        &source_text,
+        &cli.include_dirs,
+        &mut diags,
+    ) {
+        Ok((sf, u)) => (sf, u),
+        Err(e) => {
+            // Render diagnostics and return error
+            // We need a source_file for rendering, but we don't have one yet
+            // Create a dummy one for error rendering purposes
+            let dummy_source = SourceFile::new(args.path, source_text);
+            let mut out = String::new();
+            diags.render(&dummy_source, &mut out);
+            if !out.trim().is_empty() {
+                eprintln!("{}", out.trim_end());
+            }
+            anyhow::bail!("parsing failed: {}", e);
+        }
+    };
+
+    // Show a simplified AST representation
+    println!("; Parsed successfully into AST");
+    println!("; (AST visualization omitted for brevity - would show expressions, statements, declarations)");
+    println!();
+
+    // Step 3: After semantic analysis
+    println!("; === STEP 3: AFTER SEMANTIC ANALYSIS ===");
+    println!("; Types have been checked and names have been resolved to declarations");
+    println!("; This ensures the program follows the language's semantic rules");
+    println!();
+
+    let checked = match polyglot_sema::check(unit, &mut diags) {
+        Ok(ok) => ok,
+        Err(e) => {
+            // Render diagnostics and return error
+            let mut out = String::new();
+            diags.render(&source_file, &mut out);
+            if !out.trim().is_empty() {
+                eprintln!("{}", out.trim_end());
+            }
+            anyhow::bail!("type checking failed: {}", e);
+        }
+    };
+
+    if diags.has_errors() {
+        // Render diagnostics and return error
+        let mut out = String::new();
+        diags.render(&source_file, &mut out);
+        if !out.trim().is_empty() {
+            eprintln!("{}", out.trim_end());
+        }
+        anyhow::bail!("type checking failed");
+    }
+
+    // Show some basic info from semantic analysis
+    println!("; Semantic analysis completed:");
+    println!(";   {} functions", checked.funcs.len());
+    println!(";   {} global variables", checked.globals.len());
+    println!();
+
+    // Step 4: After lowering to IR
+    println!("; === STEP 4: AFTER LOWERING TO IR ===");
+    println!("; The checked program has been lowered to Polyglot IR");
+    println!("; This is a typed, register-based, block-structured intermediate representation");
+    println!();
+
+    let mut module = polyglot_ir::lower_program(checked);
+    let ir_before_opt = print_module(&module);
+    println!("; IR after lowering (before optimization):");
+    for line in ir_before_opt.lines() {
+        println!("; {}", line);
+    }
+    println!();
+
+    // Step 5: After each optimization pass
+    println!("; === STEP 5: OPTIMIZATION PASSES ===");
+    println!("; Applying optimization passes to improve the code");
+    println!();
+
+    let opt_level = pipeline::map_opt_level(cli.opt_level);
+    let stats = if opt_level == polyglot_ir::OptLevel::None {
+        polyglot_ir::OptStats::default()
+    } else {
+        // We need to modify the optimize_module function to return per-pass stats
+        // For now, we'll show the overall effect
+        polyglot_ir::optimize_module(&mut module, opt_level)
+    };
+
+    let ir_after_opt = print_module(&module);
+    println!("; IR after optimization:");
+    for line in ir_after_opt.lines() {
+        println!("; {}", line);
+    }
+    println!();
+
+    // Optimization explanations
+    println!("; Optimization explanations:");
+    println!("; 1. Constant folding: Evaluating constant expressions at compile time");
+    println!("; 2. Simplification: Applying algebraic identities (x+0=x, x*1=x, etc.)");
+    println!("; 3. Dead code elimination: Removing code that can never be executed");
+    println!("; 4. Branch folding: Converting constant conditions to unconditional jumps");
+    println!();
+
+    // Step 6: Final IR
+    println!("; === STEP 6: FINAL IR ===");
+    println!("; The final intermediate representation ready for codegen");
+    println!();
+
+    println!("; Final optimized IR:");
+    for line in ir_after_opt.lines() {
+        println!("; {}", line);
+    }
+    println!();
+
+    // Statistics
+    println!("; === STATISTICS ===");
+    println!("; Functions: {}", module.funcs.len());
+    println!("; Global variables: {}", module.globals.len());
+    println!("; Instructions before optimization: {}", stats.instrs_before);
+    println!("; Instructions after optimization: {}", stats.instrs_after);
+    println!("; Instructions removed: {}", stats.total_removed());
+    println!("; Constants folded: {}", stats.constants_folded);
+    println!("; Instructions simplified: {}", stats.instrs_simplified);
+    println!("; Dead instructions removed: {}", stats.dead_removed);
+    println!("; Branches folded: {}", stats.branches_folded);
+    println!("; Optimization iterations: {}", stats.iterations);
+    println!();
+
+    // Legend
+    println!("; Legend (common IR mnemonics):");
+    println!(";  %r = const 42 : int         -- constant into a register");
+    println!(";  store.local s0, %r0          -- write a local slot");
+    println!(";  %r = load.local s0           -- read a local slot");
+    println!(";  %r = add.int %a, %b          -- arithmetic operations");
+    println!(";  br bb1                       -- unconditional jump");
+    println!(";  br.cond %c, bb1, bb2         -- conditional jump");
+    println!(";  %r = call @f(...)            -- function call");
+    println!(";  ret %r                       -- return from function");
+    println!();
+
     Ok(())
 }
 

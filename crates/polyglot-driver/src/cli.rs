@@ -72,6 +72,9 @@ pub enum Commands {
 
     /// Show version info
     Version,
+
+    /// Internal command: show compilation transmution steps
+    TransmuteInternal(TransmuteInternalArgs),
 }
 
 #[derive(Parser, Clone)]
@@ -153,6 +156,49 @@ pub struct InitArgs {
     /// Language/plugin to use
     #[arg(long, value_name = "LANG")]
     pub language: Option<String>,
+}
+
+#[derive(Parser, Clone)]
+pub struct TransmuteInternalArgs {
+    /// Source file to compile
+    #[arg(value_name = "PATH")]
+    pub path: PathBuf,
+
+    /// Optimization level
+    #[arg(long, value_enum, default_value = "default", value_name = "LEVEL")]
+    pub opt_level: OptLevelArg,
+
+    /// Target triple
+    #[arg(long, value_name = "TRIPLE")]
+    pub target: Option<String>,
+
+    /// Add a directory to the include search path
+    #[arg(short = 'I', long = "include", value_name = "DIR")]
+    pub include_dirs: Vec<PathBuf>,
+
+    /// Compiler definition
+    #[arg(short = 'D', value_name = "NAME[=VAL]")]
+    pub defines: Vec<String>,
+
+    /// Warning level
+    #[arg(long, value_name = "LEVEL", default_value = "default")]
+    pub warn: Option<String>,
+
+    /// Treat warnings as errors
+    #[arg(long)]
+    pub werror: bool,
+
+    /// Emit debug info
+    #[arg(long)]
+    pub debug: bool,
+
+    /// Sanitizers to enable
+    #[arg(long, value_name = "LIST")]
+    pub sanitize: Option<String>,
+
+    /// Raw argument to pass to compiler
+    #[arg(last = true, value_name = "ARG")]
+    pub args: Vec<String>,
 }
 
 /// Code generation backend for `polyglot build`.

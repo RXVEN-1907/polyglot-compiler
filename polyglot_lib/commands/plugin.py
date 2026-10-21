@@ -1,4 +1,4 @@
-"""The 'plugin' command: list, install, remove and inspect JSON-RPC plugins.
+"""The 'plugin' command: list, install, remove, inspect and publish JSON-RPC plugins.
 
 A plugin is an executable speaking the protocol implemented by
 crates/polyglot-protocol (newline-delimited JSON-RPC 2.0 on stdio) plus a
@@ -7,6 +7,7 @@ polyglot-plugin.toml manifest declaring its name, version and capabilities.
 directory (<plugin-dir>/<name>/, by default ~/.polyglot/plugins/<name>/);
 'plugin list' shows what is installed, built in this workspace, and
 available from the registry index.
+'plugin publish' shares a plugin with the world by adding it to a registry index.
 """
 
 import json
@@ -38,7 +39,7 @@ MANIFEST_NAME = "polyglot-plugin.toml"
 DEFAULT_REGISTRY_URL = ("https://raw.githubusercontent.com/RXVEN-1907/"
                         "polyglot-compiler/master/registry/index.json")
 
-ACTIONS = ("list", "install", "remove", "info")
+ACTIONS = ("list", "install", "remove", "info", "publish")
 
 
 # --------------------------------------------------------------------------
@@ -186,6 +187,117 @@ def registry_lookup(name, registry=None):
         if name in (entry["name"], entry["binary"]):
             return entry, source
     return None, source
+
+
+def registry_publish(entry, registry_path=None, git_push=True):
+    """Publish a plugin entry to the registry index.
+
+    Args:
+        entry: Dictionary containing plugin metadata (name, binary, version, etc.)
+        registry_path: Path to local registry index file or remote URL
+        git_push: Whether to attempt git push after updating local index
+
+    Returns:
+        True if successful, False otherwise
+    """
+    # Determine registry location
+    if registry_path:
+        registry_file = Path(registry_path).expanduser()
+        is_remote = str(registry_file).startswith(("http://", "https://"))
+    else:
+        # Use local registry/index.json if available, otherwise workspace
+        local_registry = Path.cwd() / "registry" / "index.json"
+        workspace_registry = SCRIPT_DIR / "registry" / "index.json"
+        if local_registry.is_file():
+            registry_file = local_registry
+            is_remote = False
+        elif workspace_registry.is_file():
+            registry_file = workspace_registry
+            is_remote = False
+        else:
+            # Fall back to default remote
+            registry_file = DEFAULT_REGISTRY_URL
+            is_remote = True
+
+    # Load existing index
+    if is_remote:
+        try:
+            data, source = _read_index_source(str(registry_file))
+        except Exception as exc:
+            raise PolyglotError("cannot fetch registry index %s: %s"
+                                % (registry_file, exc))
+    else:
+        if not registry_file.is_file():
+            raise PolyglotError("registry index file not found: %s" % registry_file)
+        try:
+            data = json.loads(registry_file.read_text(encoding="utf-8"))
+            source = str(registry_file)
+        except (OSError, ValueError) as exc:
+            raise PolyglotError("cannot read registry index %s: %s" % (registry_file, exc))
+
+    # Ensure we have a plugins list
+    if "plugins" not in data or not isinstance(data["plugins"], list):
+        data["plugins"] = []
+
+    # Check if plugin already exists (by name) and update it, otherwise append
+    plugin_name = entry["name"]
+    existing_index = None
+    for i, plugin in enumerate(data["plugins"]):
+        if plugin.get("name") == plugin_name:
+            existing_index = i
+            break
+
+    if existing_index is not None:
+        # Update existing entry
+        data["plugins"][existing_index] = entry
+        action = "updated"
+    else:
+        # Add new entry
+        data["plugins"].append(entry)
+        action = "added"
+
+    # Write back the index
+    if is_remote:
+        # For remote indexes, we need to clone the repo, update, and push
+        # This is a simplified version - in practice, this would need auth, etc.
+        raise PolyglotError("Publishing to remote registries is not yet implemented. "
+                            "Please use a local registry index file.")
+    else:
+        # Write local index file
+        try:
+            registry_file.write_text(
+                json.dumps(data, indent=2) + "\n",
+                encoding="utf-8"
+            )
+            print(green("Successfully %s plugin '%s' to registry at %s"
+                       % (action, plugin_name, registry_file)))
+
+            # Attempt git push if requested and we're in a git repo
+            if git_push:
+                try:
+                    repo_dir = registry_file.parent
+                    # Check if this is a git repository
+                    git_dir = repo_dir / ".git"
+                    if git_dir.is_dir():
+                        # Add and commit the changes
+                        subprocess.run(["git", "add", str(registry_file.name)],
+                                     cwd=str(repo_dir), check=True, capture_output=True)
+                        subprocess.run(["git", "commit", "-m",
+                                      "Update plugin index: %s %s" % (action, plugin_name)],
+                                     cwd=str(repo_dir), check=True, capture_output=True)
+                        # Push to origin
+                        subprocess.run(["git", "push"],
+                                     cwd=str(repo_dir), check=True, capture_output=True)
+                        print(green("Pushed changes to git repository"))
+                    else:
+                        print(yellow("note: not a git repository; consider initializing one for version control"))
+                except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+                    print(yellow("note: failed to push to git repository: %s" % exc))
+                    print(yellow("You may need to push changes manually"))
+
+            return True
+        except Exception as exc:
+            raise PolyglotError("failed to write registry index: %s" % exc)
 
 
 # --------------------------------------------------------------------------
@@ -346,7 +458,7 @@ def _build_plugin(clone, package_dir, want=None):
     release_dirs = [clone / "target" / "release",
                     package_dir / "target" / "release"]
     for release in release_dirs:
-        for name in dict.fromkeys(filter(None, [command, want])):
+        for name in dict.fromkeys([command, want]):
             for cand in (release / name, release / (name + ".exe")):
                 if _executable(cand):
                     return cand
@@ -387,6 +499,14 @@ def _announce_install(dest_bin, have_manifest):
           % dest_bin.name)
 
 
+def _copy_manifest(manifest_src, dest_dir):
+    """Copy a manifest next to the installed binary; True when copied."""
+    if manifest_src is None or not manifest_src.is_file():
+        return False
+    shutil.copy2(manifest_src, dest_dir / MANIFEST_NAME)
+    return True
+
+
 def _install_from_git(url, subdir, plugin_root, want=None):
     """Clone (shallow), build, and install into plugin_root.
 
@@ -402,17 +522,9 @@ def _install_from_git(url, subdir, plugin_root, want=None):
         binary = _build_plugin(clone, package_dir, want=want)
         dest_bin = _install_dest(plugin_root, binary)
         _announce_install(dest_bin,
-                          _copy_manifest(package_dir / MANIFEST_NAME,
+                          _copy_manifest(manifest_for(package_dir / MANIFEST_NAME),
                                          dest_bin.parent))
         return dest_bin
-
-
-def _copy_manifest(manifest_src, dest_dir):
-    """Copy a manifest next to the installed binary; True when copied."""
-    if manifest_src is None or not manifest_src.is_file():
-        return False
-    shutil.copy2(manifest_src, dest_dir / MANIFEST_NAME)
-    return True
 
 
 def plugin_install(args):
@@ -448,6 +560,116 @@ def plugin_install(args):
               % (entry["name"], entry["version"], entry["repository"]))
         _install_from_git(entry["repository"], entry["path"] or None,
                           plugin_root, want=entry["binary"])
+
+
+# --------------------------------------------------------------------------
+# plugin publish
+# --------------------------------------------------------------------------
+
+def plugin_publish(args):
+    """Publish a plugin to the registry index."""
+    plugin_source = (args.name or "").strip()
+    if not plugin_source:
+        raise PolyglotError("usage: polyglot plugin publish <plugin-path|binary>", EXIT_USAGE)
+
+    plugin_path = Path(plugin_source).expanduser()
+    if not plugin_path.exists():
+        raise PolyglotError("plugin not found: %s" % plugin_source, EXIT_FAILURE)
+
+    # Find the manifest for this plugin
+    manifest_path = manifest_for(plugin_path)
+    if manifest_path is None or not manifest_path.is_file():
+        raise PolyglotError("no %s found for plugin %s"
+                           % (MANIFEST_NAME, plugin_source), EXIT_FAILURE)
+
+    # Load and validate manifest
+    manifest_data = _load_manifest(manifest_path)
+    if manifest_data is None:
+        raise PolyglotError("invalid or unreadable %s" % MANIFEST_NAME, EXIT_FAILURE)
+
+    # Extract required fields
+    plugin_section = manifest_data.get("plugin", {})
+    name = plugin_section.get("name")
+    version = plugin_section.get("version")
+
+    if not name:
+        raise PolyglotError("plugin missing 'name' in [plugin] section" % MANIFEST_NAME, EXIT_FAILURE)
+    if not version:
+        raise PolyglotError("plugin missing 'version' in [plugin] section" % MANIFEST_NAME, EXIT_FAILURE)
+
+    # Determine the binary path
+    if plugin_path.is_file() and os.access(plugin_path, os.X_OK):
+        # Direct binary path
+        binary_path = plugin_path.resolve()
+        # Find associated manifest (should be nearby)
+        if manifest_path.parent != binary_path.parent:
+            # Look for manifest next to binary
+            binary_manifest = binary_path.parent / MANIFEST_NAME
+            if binary_manifest.is_file():
+                manifest_path = binary_manifest
+                manifest_data = _load_manifest(manifest_path)
+                if manifest_data is None:
+                    raise PolyglotError("invalid or unreadable %s next to binary" % MANIFEST_NAME, EXIT_FAILURE)
+    elif plugin_path.is_dir():
+        # Plugin directory - look for binary inside
+        binary_path = _installed_binary(plugin_path)
+        if binary_path is None:
+            raise PolyglotError("no executable binary found in plugin directory %s" % plugin_source, EXIT_FAILURE)
+    else:
+        raise PolyglotError("plugin source must be a binary file or directory" % plugin_source, EXIT_FAILURE)
+
+    # Build registry entry
+    entry = {
+        "name": str(name),
+        "binary": str(_manifest_value(manifest_data, "plugin", "command") or
+                     ("polyglot-" + str(name))),
+        "version": str(version),
+        "description": str(_manifest_value(manifest_data, "plugin", "description") or ""),
+        "repository": str(_manifest_value(manifest_data, "plugin", "repository") or
+                         _manifest_value(manifest_data, "plugin", "repo") or
+                         _manifest_value(manifest_data, "plugin", "url") or ""),
+        "path": str(_manifest_value(manifest_data, "plugin", "path") or ""),
+    }
+
+    # Add optional fields if present
+    if _manifest_value(manifest_data, "plugin", "author"):
+        entry["author"] = str(_manifest_value(manifest_data, "plugin", "author"))
+    if _manifest_value(manifest_data, "plugin", "license"):
+        entry["license"] = str(_manifest_value(manifest_data, "plugin", "license"))
+
+    # Handle capabilities section
+    capabilities = manifest_data.get("capabilities", {})
+    if capabilities:
+        cap_entry = {}
+        if "languages" in capabilities:
+            cap_entry["languages"] = capabilities["languages"]
+        if "source_extensions" in capabilities:
+            cap_entry["source_extensions"] = capabilities["source_extensions"]
+        if "mlir_dialects" in capabilities:
+            cap_entry["mlir_dialects"] = capabilities["mlir_dialects"]
+        if cap_entry:
+            entry["capabilities"] = cap_entry
+
+    # Handle build section
+    build_section = manifest_data.get("build", {})
+    if build_section:
+        build_entry = {}
+        if "command" in build_section:
+            build_entry["command"] = str(build_section["command"])
+        if build_entry:
+            entry["build"] = build_entry
+
+    # Publish to registry
+    try:
+        registry_publish(
+            entry,
+            registry_path=getattr(args, "registry", None),
+            git_push=getattr(args, "push", True)
+        )
+    except PolyglotError:
+        raise
+    except Exception as exc:
+        raise PolyglotError("failed to publish plugin: %s" % exc)
 
 
 # --------------------------------------------------------------------------
@@ -554,20 +776,25 @@ def cmd_plugin(tc, args):
         plugin_remove(args)
     elif action == "info":
         plugin_info(args)
+    elif action == "publish":
+        plugin_publish(args)
 
 
 def register(subparsers, global_flags):
     p = subparsers.add_parser(
-        "plugin", help="Manage JSON-RPC plugins (list/install/remove/info)")
+        "plugin", help="Manage JSON-RPC plugins (list/install/remove/info/publish)")
     p.add_argument("action", choices=list(ACTIONS),
                    help="list: show installed, builtin and registry "
                         "plugins; install: install from a binary path, git "
                         "URL or registry name; remove: uninstall an "
                         "installed plugin; info: show a plugin's declared "
-                        "capabilities")
+                        "capabilities; publish: share a plugin with the registry")
     p.add_argument("name", nargs="?",
                    help="install: path, git URL or registry name; "
-                        "remove/info: plugin name")
+                        "remove/info: plugin name; "
+                        "publish: path to plugin binary or directory")
     p.add_argument("--registry", metavar="URL|PATH",
                    help="registry index URL or JSON file (overrides the "
                         "built-in registry locations)")
+    p.add_argument("--no-push", action="store_false", dest="push", default=True,
+                   help="do not attempt to push changes to git repository after publishing")

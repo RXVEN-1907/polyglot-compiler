@@ -9,16 +9,19 @@ pairwise.  Purely read-only: every artifact lives in a temporary directory.
 import argparse
 import copy
 import difflib
+import hashlib
 import json
 import re
 import tempfile
 from pathlib import Path
+from typing import Dict, List, Any, Optional
 
 from polyglot_lib.backends import OPT_MAP, common_compile_args, invoke_compiler
 from polyglot_lib.commands import command
 from polyglot_lib.output import (
     EXIT_USAGE, PolyglotError, green, red, yellow,
 )
+from polyglot_lib.inspection_cache import get_inspection_cache
 
 ORDER = 55
 
@@ -113,17 +116,6 @@ def split_functions(text):
     return chunks
 
 
-def compile_asm(tc, src, level_args, intel, out_asm):
-    """One source at one level -> assembly text (via the shared backends)."""
-    compiler = tc.compiler_for([str(src)])
-    extra = common_compile_args(tc, level_args, [str(src)])
-    if intel:
-        extra.append("-masm=intel")
-    cmd = [compiler] + extra + ["-S", str(src), "-o", str(out_asm)]
-    invoke_compiler(cmd, level_args, what="assembly emission")
-    return out_asm.read_text(errors="replace")
-
-
 def diff_stats(diff_lines):
     added = sum(1 for l in diff_lines
                 if l.startswith("+") and not l.startswith("+++"))
@@ -190,9 +182,20 @@ def print_report(file_reports, level_labels):
                 print("  %s  %s  %s %s"
                       % (yellow("diff"), label, green("+%d" % f["added"]),
                          red("-%d" % f["removed"])))
-                for line in f["diff"]:
-                    print("    " + paint_diff_line(line))
+            for line in f["diff"]:
+                print("    " + paint_diff_line(line))
             print()
+
+
+def _get_cache_key(sources, levels, intel):
+    """Generate a cache key for diff-asm results."""
+    key_data = {
+        "sources": sorted([str(s) for s in sources]),
+        "levels": [(label, flag, key) for label, flag, key in levels],
+        "intel": intel,
+    }
+    key_str = json.dumps(key_data, sort_keys=True)
+    return hashlib.sha256(key_str.encode()).hexdigest()[:16]
 
 
 @command("diff-asm")
@@ -205,6 +208,20 @@ def cmd_diff_asm(tc, args):
     intel = getattr(args, "intel", False)
     as_json = getattr(args, "json", False) \
         or getattr(args, "output", "text") == "json"
+    no_cache = getattr(args, "no_cache", False)
+
+    # Check for cached results
+    if as_json and not no_cache:
+        cache_key = _get_cache_key(sources, levels, intel)
+        cached = get_inspection_cache().get(
+            "diff-asm",
+            sources=[str(s) for s in sources],
+            levels=[(label, flag, key) for label, flag, key in levels],
+            intel=intel,
+        )
+        if cached is not None:
+            print(json.dumps(cached, indent=2))
+            return
 
     file_reports = []
     for src in sources:
@@ -217,15 +234,16 @@ def cmd_diff_asm(tc, args):
                 asm = tmpdir / ("%s.%d.s" % (src.stem, i))
                 chunks_by_label[label] = split_functions(
                     compile_asm(tc, src, level_args, intel, asm))
-        pairs = []
-        for (la, _fa, _ka), (lb, _fb, _kb) in zip(levels, levels[1:]):
-            pairs.append({"from": la, "to": lb,
-                          "functions": pair_diffs(chunks_by_label[la],
-                                                  chunks_by_label[lb],
-                                                  la, lb)})
-        file_reports.append({"file": str(src), "pairs": pairs})
+            pairs = []
+            for (la, _fa, _ka), (lb, _fb, _kb) in zip(levels, levels[1:]):
+                pairs.append({"from": la, "to": lb,
+                              "functions": pair_diffs(chunks_by_label[la],
+                                                      chunks_by_label[lb],
+                                                      la, lb)})
+            file_reports.append({"file": str(src), "pairs": pairs})
 
     if as_json:
+        # Prepare JSON output
         payload = {
             "backend": tc.kind,
             "compiler_version": tc.version,
@@ -233,6 +251,18 @@ def cmd_diff_asm(tc, args):
                        for label, flag, _ in levels],
             "files": file_reports,
         }
+
+        # Cache the result
+        if not no_cache:
+            cache_key = _get_cache_key(sources, levels, intel)
+            get_inspection_cache().set(
+                "diff-asm",
+                payload,
+                sources=[str(s) for s in sources],
+                levels=[(label, flag, key) for label, flag, key in levels],
+                intel=intel,
+            )
+
         print(json.dumps(payload, indent=2))
         return
     print_report(file_reports, [label for label, _, _ in levels])
@@ -254,4 +284,39 @@ def register(subparsers, global_flags):
     p.add_argument("--json", action="store_true",
                    help="machine-readable JSON output (same as "
                         "--output json)")
+    p.add_argument("--no-cache", action="store_true",
+                   help="disable caching of inspection results")
     global_flags.add_common_flags(p)
+
+
+def compile_asm(tc, source_path: Path, args, intel: bool, asm_path: Path) -> str:
+    """Compile source to assembly and return the content."""
+    import subprocess
+    import os
+
+    # Get compiler flags for the given optimization level
+    flags = common_compile_args(tc, args)
+
+    # Add Intel syntax flag if requested
+    if intel:
+        flags.append("-masm=intel")
+
+    # Add flags to output assembly instead of object file
+    flags.extend(["-S", "-o", str(asm_path)])
+
+    # Add source file
+    flags.append(str(source_path))
+
+    # Run the compiler
+    try:
+        result = subprocess.run(
+            [str(tc.compiler_for([source_path]))] + flags,
+            capture_output=True, text=True, check=True
+        )
+        return asm_path.read_text()
+    except subprocess.CalledProcessError as e:
+        raise PolyglotError(
+            f"compiler failed with return code {e.returncode}: {e.stderr}"
+        )
+    except OSError as e:
+        raise PolyglotError(f"failed to execute compiler: {e}")
