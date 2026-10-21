@@ -237,14 +237,20 @@ jobs:
             base=$(basename "$t" .tar.gz)
             tmp=$(mktemp -d)
             tar -xzf "$t" -C "$tmp"
-            if [ "${base#polyglot-$VERSION-python}" = "$base" ]; then
-              b="$tmp/$base/polyglot-driver"
-              chmod +x "$b"
-              "$b" --version | grep -q "$VERSION" || { echo "::error::$base: bad --version"; exit 1; }
-              [ -x "$tmp/$base/polyglot-clang" ] || { echo "::error::$base: missing polyglot-clang"; exit 1; }
-            else
+            if [ "${base#polyglot-$VERSION-python}" != "$base" ]; then
               grep -q "^VERSION = \"$VERSION\"" "$tmp/$base/polyglot_lib/__init__.py" \
                 || { echo "::error::$base: python archive wrong version"; exit 1; }
+            else
+              # Exec-smoke only what the x86_64 runner can run; every other
+              # target gets structural checks (cross binaries won't exec here).
+              [ -x "$tmp/$base/polyglot-driver" ] || { echo "::error::$base: missing polyglot-driver"; exit 1; }
+              [ -x "$tmp/$base/polyglot-clang" ] || { echo "::error::$base: missing polyglot-clang"; exit 1; }
+              case "$base" in
+                *x86_64-unknown-linux-*)
+                  "$tmp/$base/polyglot-driver" --version | grep -q "$VERSION" \
+                    || { echo "::error::$base: bad --version"; exit 1; }
+                  ;;
+              esac
             fi
             rm -rf "$tmp"
           done
