@@ -182,7 +182,7 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 **Examples:**
 ```
 feat(driver): add --emit-obj flag for object file output
-fix(mlir): resolve memory leak in context creation
+fix(sema): resolve false redefinition error in nested scopes
 docs(readme): update cross-compilation examples
 perf(cache): optimize content-addressable storage lookup
 ```
@@ -313,28 +313,31 @@ Use the [Feature Request Template](.github/ISSUE_TEMPLATE/feature_request.md) an
 ### Python Driver (`polyglot`)
 
 The main entry point. Handles:
-- CLI parsing (`argparse`)
+- CLI parsing (`argparse`, auto-discovered commands in `polyglot_lib/commands/`)
 - Project configuration (`polyglot.toml`)
-- Build orchestration (calls Clang)
+- Build orchestration (gcc or clang), caching, and parallelism
 - Diagnostics formatting
 
 Key files:
-- `polyglot` - Main executable (~460 lines)
+- `polyglot` - thin launcher
+- `polyglot_lib/cli.py` - command dispatch
+- `polyglot_lib/commands/` - one module per command
 
 ### Rust Crates
 
-| Crate | Responsibility | Key Types |
-|-------|----------------|-----------|
-| `polyglot-protocol` | JSON-RPC 2.0 communication | `Request`, `Response`, `Transport` |
-| `polyglot-mlir` | MLIR C API bindings | `Context`, `Module`, `PassManager` |
-| `polyglot-codegen` | Cranelift codegen | `CodegenBackend`, `TargetConfig` |
-| `polyglot-driver` | Build orchestration | `BuildEngine`, `PluginManager` |
-| `polyglot-cache` | Incremental compilation | `Cache`, `ContentAddressableStore` |
-| `polyglot-registry` | Plugin registry client | `RegistryClient`, `PluginMetadata` |
-| `polyglot-syntax` | Lexer/parser/AST | `Lexer`, `Parser`, `AST` |
-| `polyglot-sema` | Semantic analysis | `Analyzer`, `TypeChecker` |
-| `polyglot-core` | Core types | `Span`, `Diagnostic`, `Symbol` |
-| `polyglot-ir` | MLIR lowering/optimization | `LoweringContext`, `Optimizer` |
+| Crate | Responsibility |
+|-------|----------------|
+| `polyglot-core` | Spans, diagnostics, C type model |
+| `polyglot-syntax` | Preprocessor, lexer, parser, AST |
+| `polyglot-sema` | Name resolution, type checking |
+| `polyglot-ir` | AST lowering, optimization passes, printing |
+| `polyglot-protocol` | JSON-RPC 2.0 types and transport |
+| `polyglot-codegen` | polyglot-ir → LLVM IR → object files (`llc`) |
+| `polyglot-driver` | clap CLI + the in-process pipeline |
+| `plugins/polyglot-clang` | Reference JSON-RPC plugin (shells to clang) |
+
+The default build has zero system-library dependencies; the experimental
+MLIR/Cranelift paths were removed in 0.3.0.
 
 ### Plugin Architecture
 
@@ -357,8 +360,6 @@ Driver (Python)          Plugin (Rust binary)
 ## 📚 Resources
 
 - [LLVM Documentation](https://llvm.org/docs/)
-- [MLIR Reference](https://mlir.llvm.org/docs/)
-- [Cranelift Documentation](https://github.com/bytecodealliance/wasmtime/tree/main/cranelift/docs)
 - [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/)
 - [Python Style Guide](https://pep8.org/)
 
