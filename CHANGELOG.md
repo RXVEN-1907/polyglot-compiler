@@ -7,11 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-21
+
+The lightweight rebuild: same product, honest edges, zero heavyweight
+dependencies in the default build.
+
 ### Added
-- Comprehensive GitHub repository setup with CI/CD
-- Issue templates and PR templates
-- Contributing guidelines and code of conduct
-- Security policy documentation
+
+- `pyproject.toml`: the driver is pip-installable —
+  `pipx install git+https://github.com/RXVEN-1907/polyglot-compiler`
+  now works, with a `polyglot` entry point (stdlib + `toml` only).
+- `transmute-internal` on the Rust driver: narrated step-by-step
+  compilation (source → AST → sema → IR → object).
+- Binary inspection commands land as first-class citizens: `inspect`
+  and `query` correlated multi-tool views, `fixit`, `diagnose`,
+  `secopt`, `verify`, `transmute`, `compile-commands`, `addr2line`,
+  `cxxfilt`, `strings`, `debug` — the full 49-command surface is now
+  actually committed.
+- Friendlier directory-build error (points at polyglot.toml or the
+  explicit multi-source form).
+- A visual identity generated from committed scripts (`scripts/`):
+  self-adapting logo, social preview, three mode banners (FORGE amber /
+  INSPECT slate green / TRANSMUTE crimson — one accent per canvas,
+  lavender everywhere), two real-output demo GIFs, and a measured cache
+  chart.
+
+### Changed
+
+- **The default Rust build needs no system LLVM.** Removed the
+  never-wired mlir-sys + cranelift dependencies and the stub backends
+  that wrote empty object files. Cross-compiling `polyglot-driver` is
+  now a plain cargo build on every target.
+- Removed dead crates `polyglot-mlir`, `polyglot-cache`, and
+  `polyglot-registry` (nothing imported them; the working cache and
+  plugin clients live in the Python driver).
+- README rewritten around what the product actually is; CI's audit and
+  Pages plumbing updated.
+
+### Fixed
+
+- `cargo audit` clean: rustls 0.23.46 (four RUSTSEC-2026 advisories)
+  and ruzstd dropped from the tree by removing the never-imported
+  `object` dependency.
+- Cargo.lock is now actually tracked, as CI's cache comment always
+  claimed.
+- clippy clean under `--all-targets`.
+- Tests restored: the comprehensive Python suite and all fixtures were
+  sitting deleted in the working tree.
 
 ## [0.2.0] - 2026-09-27
 

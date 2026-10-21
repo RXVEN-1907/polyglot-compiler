@@ -1,5 +1,5 @@
 """
-Polyglot - Universal Compiler Driver (v0.2.0)
+Polyglot - Universal Compiler Driver (v0.3.0)
 
 A driver that discovers and drives clang / GCC toolchains: build, run,
 check, IR/ASM emission, formatting, linting, JIT, static analysis,
@@ -18,7 +18,7 @@ try:
 except ImportError:  # pragma: no cover - toml is only needed for project files
     toml = None
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 # Directory containing this package - i.e. the directory holding the
 # executable 'polyglot' launcher.  Plugin resolution scans

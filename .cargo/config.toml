@@ -1,15 +1,6 @@
 # Workspace-local build configuration.
 #
-# polyglot-mlir / polyglot-codegen link against the MLIR C API from an LLVM 17
-# install: mlir-sys (v220) locates it through MLIR_SYS_220_PREFIX and bindgen
-# needs clang's builtin headers. There is deliberately no [env] block here —
-# a checked-in prefix only works on one machine. CI sets its own values in
-# .github/workflows/ci.yml; for local development export them in your shell
-# (see the "LLVM / MLIR toolchain" section of ~/.bashrc on the dev box), e.g.:
-#
-#   export MLIR_SYS_220_PREFIX=/path/to/clang+llvm-17.0.6-x86_64-linux-gnu-ubuntu-22.04
-#   export BINDGEN_EXTRA_CLANG_ARGS="-I$MLIR_SYS_220_PREFIX/lib/clang/17/include"
-#
-# Plain [env] entries never override variables already present in the
-# environment, so exporting the same names in the shell takes precedence
-# either way.
+# The workspace has no external system-library dependencies: polyglot-driver
+# and polyglot-clang build with a plain `cargo build` on any machine. The
+# driver *uses* system toolchains at run time (gcc/clang, llvm tools) and
+# self-discovers them; `polyglot doctor` reports what it found.
