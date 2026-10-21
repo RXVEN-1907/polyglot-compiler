@@ -91,9 +91,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install cargo-zigbuild and zig
-        run: |
-          pip3 install cargo-zigbuild "ziglang==0.14.1"
-          cargo zigbuild --version
+        run: pip3 install cargo-zigbuild "ziglang==0.14.1"
 
       - name: Build binaries
         run: cargo zigbuild --release -p polyglot-driver -p polyglot-clang --target ${{ matrix.target }}
