@@ -60,7 +60,8 @@ The logo, mode banners, social preview, demo GIFs and the cache chart are genera
 python3 scripts/gen_logo.py          # logo (self-adapting)
 python3 scripts/gen_mode_banners.py  # FORGE / INSPECT / TRANSMUTE banners
 python3 scripts/gen_social.py        # social preview
-python3 scripts/gen_demo_gif.py      # demo GIFs
+python3 scripts/gen_gifs.py           # the three session GIFs
+python3 scripts/gen_svgs.py           # the vector diagrams
 python3 scripts/gen_charts.py        # cache chart
 ```
 

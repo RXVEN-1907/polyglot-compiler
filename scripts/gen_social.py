@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """Generate .github/social-preview.png (and its light twin): the repository
-card - polyglot badge, wordmark, tagline, and one live-looking build line.
-Renders in the FORGE pairing (lavender + amber is the only accent on this
-canvas); the mode banners carry the other pairings.
-
-Deterministic: fixed layout, no clock, no randomness.
+card - the P monogram, wordmark, tagline, and one live-looking build line.
+Renders in the FORGE pairing (lavender + copper is the only accent on this
+canvas). Deterministic.
 
 Usage: python3 scripts/gen_social.py
 """
@@ -17,38 +15,29 @@ sys.path.insert(0, str(Path(__file__).parent))
 from theme import MONO, MONO_B, SANS_B, palette, hxc
 
 
-def badge(d: ImageDraw.ImageDraw, x: int, y: int, size: int, p: dict) -> None:
-    """The polyglot mark, raster form: glyphs -> diamond -> byte grid."""
-    s = size
-    d.rounded_rectangle((x, y, x + s, y + s), radius=s // 5, fill=hxc(p["panel"]),
-                        outline=hxc(p["edge"]), width=3)
-    # source glyphs: braces, angle brackets, parens - lavender strokes
-    lw = max(4, s // 30)
-    gx, gy = x + s * 0.16, y + s * 0.16
-    u = s * 0.065
-    d.arc((gx, gy, gx + 2.4 * u, gy + 2.4 * u), start=110, end=250, fill=hxc(p["lavender"]), width=lw)      # (
-    d.arc((gx + 3.2 * u, gy, gx + 5.6 * u, gy + 2.4 * u), start=-70, end=70, fill=hxc(p["lavender"]), width=lw)  # )
-    d.line((gx - 0.2 * u, gy + 3.4 * u, gx + 1.6 * u, gy + 4.6 * u), fill=hxc(p["lavender"]), width=lw)
-    d.line((gx + 1.6 * u, gy + 4.6 * u, gx - 0.2 * u, gy + 5.8 * u), fill=hxc(p["lavender"]), width=lw)     # <
-    # flow into the diamond
-    fx, fy = x + s * 0.42, y + s * 0.52
-    d.line((gx + 3.0 * u, gy + 3.0 * u, fx, fy), fill=hxc(p["edge"]), width=max(3, s // 40))
-    d.line((gx - 0.4 * u, gy + 6.4 * u, fx - s * 0.05, fy + s * 0.05), fill=hxc(p["edge"]), width=max(3, s // 40))
-    # the transformation diamond
-    dm = s * 0.11
-    d.polygon([(fx, fy - dm), (fx + dm, fy), (fx, fy + dm), (fx - dm, fy)], fill=hxc(p["accent"]))
-    # the machine: byte grid condensing out of the diamond
-    cell = s * 0.075
-    bx0, by0 = fx + s * 0.055, fy - s * 0.045
-    for row in range(4):
-        for col in range(4):
-            if (row * 4 + col) % 5 == 0:
-                continue
-            op = 0.9 - 0.18 * row
-            c = tuple(int(v * op + hxc(p["edge"])[i] * (1 - op)) for i, v in enumerate(hxc(p["text"])))
-            d.rounded_rectangle((bx0 + col * cell, by0 + row * cell,
-                                 bx0 + col * cell + cell * 0.62, by0 + row * cell + cell * 0.62),
-                                radius=2, fill=c)
+def mark(d: ImageDraw.ImageDraw, x: int, y: int, s: int, p: dict) -> None:
+    """The P monogram, raster: pipe stem, top bar, paren bowl, accent chevron."""
+    lw = max(10, s // 13)
+    cx = x + s * 0.34          # stem x
+    top = y + s * 0.06
+    bot = y + s * 0.94
+    bar_y = y + s * 0.10
+    ret_y = y + s * 0.47
+    bowl_r = s * 0.17
+    # stem (pipe)
+    d.line((cx, top, cx, bot), fill=hxc(p["lavender"]), width=lw)
+    # top bar
+    d.line((cx, bar_y, cx + s * 0.26, bar_y), fill=hxc(p["lavender"]), width=lw)
+    # paren-arc bowl
+    d.arc((cx + s * 0.26 - bowl_r, bar_y, cx + s * 0.26 + bowl_r, ret_y),
+          start=-90, end=90, fill=hxc(p["lavender"]), width=lw)
+    # return bar
+    d.line((cx, ret_y, cx + s * 0.26, ret_y), fill=hxc(p["lavender"]), width=lw)
+    # the chevron in the counter
+    ch = s * 0.09
+    ccx, ccy = cx + s * 0.22, (bar_y + ret_y) / 2
+    d.line((ccx + ch * 0.7, ccy - ch, ccx - ch * 0.5, ccy), fill=hxc(p["accent"]), width=max(6, lw // 2))
+    d.line((ccx - ch * 0.5, ccy, ccx + ch * 0.7, ccy + ch), fill=hxc(p["accent"]), width=max(6, lw // 2))
 
 
 def render(p: dict, out: Path) -> None:
@@ -56,22 +45,22 @@ def render(p: dict, out: Path) -> None:
     img = Image.new("RGB", (W, H), hxc(p["canvas"]))
     d = ImageDraw.Draw(img)
 
-    badge(d, 84, 164, 312, p)
+    mark(d, 70, 150, 340, p)
 
     mono_b = lambda s: ImageFont.truetype(MONO_B, s)
     sans_b = lambda s: ImageFont.truetype(SANS_B, s)
 
-    d.text((452, 168), "polyglot", font=mono_b(150), fill=hxc(p["text"]))
-    d.text((458, 348), "one driver. every toolchain.", font=sans_b(40), fill=hxc(p["lavender"]))
+    d.text((440, 168), "polyglot", font=mono_b(150), fill=hxc(p["text"]))
+    d.text((446, 348), "many languages. one shape.", font=sans_b(40), fill=hxc(p["lavender"]))
 
     # a live-looking build line: lavender counts, one accent stat
     y = 452
-    d.rounded_rectangle((452, y - 18, 1196, y + 96), radius=14, fill=hxc(p["panel"]), outline=hxc(p["edge"]), width=2)
+    d.rounded_rectangle((440, y - 18, 1196, y + 96), radius=14, fill=hxc(p["panel"]), outline=hxc(p["edge"]), width=2)
     mono = ImageFont.truetype(MONO, 28)
-    d.text((484, y), "$ polyglot build ./your-project", font=mono, fill=hxc(p["dim"]))
-    d.text((484, y + 44), "61 TUs parallel  ", font=mono, fill=hxc(p["text"]))
+    d.text((472, y), "$ polyglot build ./engine -j 8", font=mono, fill=hxc(p["dim"]))
+    d.text((472, y + 44), "61 TUs parallel  ", font=mono, fill=hxc(p["text"]))
     tail = d.textlength("61 TUs parallel  ", font=mono)
-    d.text((484 + tail, y + 44), "873 ms cached", font=mono, fill=hxc(p["accent"]))
+    d.text((472 + tail, y + 44), "0.873s warm", font=mono, fill=hxc(p["accent"]))
 
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out, optimize=True)

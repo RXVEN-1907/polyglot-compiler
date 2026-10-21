@@ -1,38 +1,38 @@
 """polyglot design tokens - the single source every visual asset renders from.
 
 The system: lavender is the soul and appears everywhere. Each MODE pairs it
-with exactly one accent; the other accents never appear on the same screen.
+with exactly one accent; the other accents never appear on the same canvas.
 
-    dark   canvas #0D0E12  text #FFFFFF  lavender #BDB2FF
-    light  canvas #FBFBFC  text #111215  lavender #7A6EE6
+    dark   canvas #0B0C10  text #F5F6FA  lavender #C3B1E1
+    light  canvas #FAFAFC  text #1A1C23  lavender #6C5CE7
 
-    FORGE      amber        (dark #F0A431 / light #B97A0A)  build, run, cache
-    INSPECT    slate green  (dark #4CC38A / light #218358)  binaries, disasm
-    TRANSMUTE  crimson      (dark #E5484D / light #D13438)  IR, the pipeline
+    FORGE      copper (dark #E29A6C / light #A85F32)   build, run, cache
+    INSPECT    teal   (dark #54C6B8 / light #17877B)   binaries, disasm
+    TRANSMUTE  ochre  (dark #DCAF4F / light #9C7418)   IR, the pipeline
 
 Usage: sys.path.insert(0, str(Path(__file__).parent)); from theme import *
 """
 
 from __future__ import annotations
 
-CANVAS_DARK = "#0D0E12"
-CANVAS_LIGHT = "#FBFBFC"
-PANEL_DARK = "#16181F"
-PANEL_LIGHT = "#F1F1F4"
-EDGE_DARK = "#2A2D37"
-EDGE_LIGHT = "#D8D8DE"
-TEXT_DARK = "#FFFFFF"
-TEXT_LIGHT = "#111215"
-DIM_DARK = "#8B90A0"
-DIM_LIGHT = "#5A5E6A"
-LAVENDER_DARK = "#BDB2FF"
-LAVENDER_LIGHT = "#7A6EE6"
-LAVENDER_DEEP = "#8A7BD8"  # mid stop for gradients, mode-independent
+CANVAS_DARK = "#0B0C10"
+CANVAS_LIGHT = "#FAFAFC"
+PANEL_DARK = "#14161C"
+PANEL_LIGHT = "#F0F1F5"
+EDGE_DARK = "#262933"
+EDGE_LIGHT = "#DADBE1"
+TEXT_DARK = "#F5F6FA"
+TEXT_LIGHT = "#1A1C23"
+DIM_DARK = "#8A8FA3"
+DIM_LIGHT = "#5C6070"
+LAVENDER_DARK = "#C3B1E1"
+LAVENDER_LIGHT = "#6C5CE7"
+LAVENDER_DEEP = "#9C86D9"  # mid stop for gradients, mode-independent
 
 MODES = {
-    "forge": {"name": "FORGE", "dark": "#F0A431", "light": "#B97A0A"},
-    "inspect": {"name": "INSPECT", "dark": "#4CC38A", "light": "#218358"},
-    "transmute": {"name": "TRANSMUTE", "dark": "#E5484D", "light": "#D13438"},
+    "forge": {"name": "FORGE", "accent": "copper", "dark": "#E29A6C", "light": "#A85F32"},
+    "inspect": {"name": "INSPECT", "accent": "teal", "dark": "#54C6B8", "light": "#17877B"},
+    "transmute": {"name": "TRANSMUTE", "accent": "ochre", "dark": "#DCAF4F", "light": "#9C7418"},
 }
 
 MONO = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"

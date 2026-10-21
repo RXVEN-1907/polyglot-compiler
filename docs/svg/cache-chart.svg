@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 380" width="100%">
+  <style>:root { --canvas: #0B0C10; --text: #F5F6FA; --dim: #8A8FA3;
+              --lav: #C3B1E1; --acc: #DCAF4F; --edge: #262933; --bit: #1C1F27; }
+    @media (prefers-color-scheme: light) {
+      :root { --canvas: #FAFAFC; --text: #1A1C23; --dim: #5C6070;
+              --lav: #6C5CE7; --acc: #9C7418; --edge: #DADBE1; --bit: #E4E5EB; }
+    }</style>
+  <text x="60" y="58" font-family="ui-monospace,monospace" font-size="27" font-weight="bold" fill="var(--text)">incremental object cache</text>
+  <text x="62" y="90" font-family="ui-monospace,monospace" font-size="17" fill="var(--lav)">same 61-TU rebuild, measured</text>
+  <text x="60" y="138" font-family="ui-monospace,monospace" font-size="18" fill="var(--dim)">--no-cache (full recompile)</text><rect x="60" y="150" width="560" height="40" rx="9" fill="var(--bit)"/><text x="640" y="177" font-family="ui-monospace,monospace" font-size="24" font-weight="bold" fill="var(--dim)">2278 ms</text><text x="60" y="234" font-family="ui-monospace,monospace" font-size="18" fill="var(--dim)">warm .polyglot-cache</text><rect x="60" y="246" width="215" height="40" rx="9" fill="var(--lav)"/><text x="295" y="273" font-family="ui-monospace,monospace" font-size="24" font-weight="bold" fill="var(--text)">873 ms</text>
+  <text x="60" y="352" font-family="ui-monospace,monospace" font-size="22" font-weight="bold" fill="var(--acc)">2.8x faster</text>
+  <text x="240" y="352" font-family="ui-monospace,monospace" font-size="17" fill="var(--dim)">unchanged TUs never recompile</text>
+</svg>
