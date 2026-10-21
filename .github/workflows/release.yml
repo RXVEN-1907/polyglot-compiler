@@ -220,6 +220,13 @@ jobs:
           pattern: dist-*
           merge-multiple: true
 
+      # Each build artifact carries its own dist-polyglot-*/ directory;
+      # merge-multiple keeps that level, so lift the archives to dist/.
+      - name: Flatten artifact directories
+        run: |
+          find dist -mindepth 2 \( -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} dist/ \;
+          find dist -mindepth 1 -type d -empty -delete
+
       - name: Verify and checksum
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
