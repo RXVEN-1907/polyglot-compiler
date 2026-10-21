@@ -1,11 +1,11 @@
 # Polyglot Compiler Architecture
 
 !!! note
-    This document predates the v0.2.0 driver rewrite. The driver now auto-discovers GCC **or** clang (including clang installs off `PATH`), uses an incremental object cache (`.polyglot-cache/`), and ships 20 subcommands (including `doctor`, `fmt`, `tidy`, `analyze`, `mca`, `jit`, `repl`, `preproc`, `deps`, `watch`, `targets`, `stats --json`). The maintained documentation tree is under `docs/` (built with mkdocs) — start at `docs/index.md` or `docs/architecture/overview.md`. The backend description below is corrected where it claimed clang is required.
+    This is the architecture description for the v0.3.0 rebuild. The maintained documentation tree is under `docs/` (built with mkdocs) — start at [Architecture Overview](architecture/overview.md) for the driver side and [Python Driver](architecture/python-driver.md) for internals.
 
 ## Overview
 
-Polyglot is designed as a **modular, extensible compiler infrastructure** with a clear separation between the user-facing driver and the backend compilation pipeline.
+Polyglot is designed as a **modular, extensible compiler infrastructure** with a clear separation between the user-facing Python driver (the product) and the self-contained Rust compiler pipeline (the lab).
 
 ## High-Level Architecture
 
@@ -19,10 +19,13 @@ Polyglot is designed as a **modular, extensible compiler infrastructure** with a
           │                 │                 │                 │
           ▼                 ▼                 ▼                 ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        POLYGLOT DRIVER (Python)                              │
+│                   POLYGLOT DRIVER (Python, polyglot_lib/)                    │
 │  ┌──────────────────────────────────────────────────────────────────────┐   │
 │  │                        Command Router                                 │   │
-│  │  build │ run │ check │ emit-ir │ emit-asm │ clean │ stats │ init    │   │
+│  │  build │ run │ check │ emit-ir │ emit-asm │ inspect │ query │ ...     │   │
+│  │  (49 commands: cached parallel builds, sanitizers, IR/asm emission,   │   │
+│  │   binary inspection, fmt/tidy/analyze/fuzz/pgo/mca, doctor, plugins,  │   │
+│  │   preview, transmute)                                                 │   │
 │  └──────────────────────────────────────────────────────────────────────┘   │
 │                                    │                                        │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │
@@ -34,168 +37,94 @@ Polyglot is designed as a **modular, extensible compiler infrastructure** with a
            ┌───────────────────────┼───────────────────────┐
            ▼                       ▼                       ▼
 ┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
-│   GCC / g++         │ │  clang / clang++    │ │  Future Plugins     │
-│   -fsyntax-only     │ │  -fsyntax-only      │ │  (Rust, Swift,      │
-│  -S -emit-llvm      │ │  -S -emit-llvm      │ │   Zig, etc.)        │
-│  -O0 through -O3    │ │  -O0 through -O3    │ │                     │
+│   GCC / g++         │ │  clang / clang++    │ │  Rust driver        │
+│  -fsyntax-only      │ │  -fsyntax-only      │ │  (in-process        │
+│  -S -emit-llvm      │ │  -S -emit-llvm      │ │  pipeline, see      │
+│  -O0 through -Oz    │ │  -O0 through -Oz    │ │  below)             │
 │  --target=...       │ │  --target=...       │ │                     │
 └─────────────────────┘ └─────────────────────┘ └─────────────────────┘
 ```
 
 ## Component Details
 
-### 1. Python Driver (`polyglot`)
+### 1. Python Driver (`polyglot`, `polyglot_lib/`)
 
-**File:** `polyglot` (~460 lines)
+**Files:** `polyglot` (thin launcher) + the `polyglot_lib/` package (toolchain discovery, backends, cache, config, output, plugin client, and one module per command under `polyglot_lib/commands/`).
 
 **Responsibilities:**
-- Command-line argument parsing
+- Command-line argument parsing (49 subcommands)
 - Project configuration management (`polyglot.toml`)
-- Build orchestration (invokes Clang)
+- Cached parallel builds (sha256-keyed object cache in `.polyglot-cache/`)
+- Sanitizer passthrough, cross-target listing, binary inspection
+  (`nm`/`objdump`/`readelf`/`size`/`strings`/`strip`/`addr2line`/`c++filt`,
+  correlated `inspect`/`query` views)
+- IR/asm emission, fmt/tidy/analyze/fuzz/pgo/mca, doctor, plugin management,
+  preview (local Compiler Explorer), transmute (narrated compilation)
 - Diagnostic formatting and reporting
-- Temporary file management
 
-**Key Classes:**
-```python
-class PolyglotDriver:
-    def build(self, args)        # Build source files or project
-    def run(self, args)          # Build and execute
-    def check(self, args)        # Syntax check only
-    def emit_ir(self, args)      # Emit LLVM IR
-    def emit_asm(self, args)     # Emit assembly
-    def clean(self, args)        # Clean artifacts
-    def init(self, args)         # Initialize project
-    def stats(self, args)        # Compilation statistics
-    def version(self)            # Show version
+Dependencies: Python 3.8+ standard library plus the `toml` package, and any
+one C compiler (gcc or clang).
+
+### 2. Rust Workspace (7 crates + 1 plugin)
+
+The Rust side is a self-contained compiler pipeline for C sources. The
+default build needs **no system LLVM** (the experimental MLIR/Cranelift
+paths were removed in 0.3.0; the active path is LLVM IR emission).
+
+| Crate | Purpose | Key types |
+|-------|---------|-----------|
+| `polyglot-core` | Shared foundation | `Span`, `Diagnostic`, `DiagnosticEngine`, `SourceFile`, `Type`, `IntKind`, `StructDef` |
+| `polyglot-syntax` | Lexer and parser | `Lexer`, `Parser`, AST nodes |
+| `polyglot-sema` | Semantic analysis | `CheckedProgram`, name resolution, type checking |
+| `polyglot-ir` | Lowering, optimization, printing | `Module`, `Instr`, `lower_program`, `optimize_module`, `print_module`, `OptLevel` |
+| `polyglot-protocol` | JSON-RPC 2.0 plugin types | `Request`/`Response`/`Notification`, `Transport`, `Handler` |
+| `polyglot-codegen` | `polyglot-ir` → LLVM IR text → objects | `emit_ll`, `emit_ll_named`, `emit_object`, `find_llc` |
+| `polyglot-driver` | clap CLI + in-process pipeline | `Cli`, `Commands`, `parse_and_check`, `run_simple_driver` |
+| `plugins/polyglot-clang` | Reference JSON-RPC stdio plugin server | `initialize`/`compile`/`shutdown` handling |
+
+**Pipeline (in-process, `crates/polyglot-driver`):**
+
+```
+parse_source (syntax) → check (sema) → lower_program (IR)
+  → optimize_module → { print_module (textual Polyglot IR),
+                        emit_ll → LLVM IR text }
 ```
 
-### 2. Rust Library Crates
+`--backend native` compiles the emitted LLVM IR to a real object file with
+`llc -filetype=obj` (with a graceful fallback to writing the `.ll`) and links
+with the system `cc`.
 
-#### polyglot-protocol
-**Purpose:** JSON-RPC 2.0 communication between driver and plugins
-
-**Key Types:**
-- `Request/Response/Notification` - Protocol messages
-- `Transport` - Stdio-based transport
-- `Handler` - Request/response handler
-- `InitializeParams/InitializeResult` - Handshake
-
-#### polyglot-mlir
-**Purpose:** MLIR C API bindings and optimization passes
-
-**Key Types:**
-- `Context` - MLIR context with dialect loading
-- `Module` - MLIR module representation
-- `PassManager` - Optimization pass pipeline
-- `Dialect` - Builtin dialects (arith, func, memref, scf, vector, llvm, cf)
-
-**Optimization Passes:**
-- Canonicalization
-- CSE (Common Subexpression Elimination)
-- LICM (Loop Invariant Code Motion)
-- Inlining
-- SCCP (Sparse Conditional Constant Propagation)
-
-#### polyglot-codegen
-**Purpose:** Cranelift codegen backend (MLIR → CLIF → native)
-
-**Key Types:**
-- `CodegenBackend` - Main codegen interface
-- `TargetConfig` - Target triple, CPU, features
-- `OptimizationLevel` - Mapping to Cranelift levels
-- `ObjectFile` - Emitted object file
-
-**Supported Targets:**
-- x86_64 (Intel/AMD 64-bit)
-- aarch64 (ARM 64-bit)
-- riscv64 (RISC-V 64-bit)
-- wasm32 (WebAssembly)
-
-#### polyglot-driver
-**Purpose:** Build orchestration and plugin management
-
-**Key Types:**
-- `BuildEngine` - Main build orchestration
-- `PluginManager` - Plugin discovery and lifecycle
-- `ProjectConfig` - polyglot.toml parsing
-- `BuildPlan` - Compilation plan
-
-#### polyglot-cache
-**Purpose:** Incremental compilation cache
-
-**Key Types:**
-- `Cache` - Main cache interface
-- `ContentAddressableStore` - CAS for artifacts
-- `CacheKey` - Content-based keys
-- `CacheEntry` - Cached compilation results
-
-#### polyglot-registry
-**Purpose:** Plugin registry client
-
-**Key Types:**
-- `RegistryClient` - HTTP client for registry
-- `PluginMetadata` - Plugin information
-- `SearchQuery` - Plugin search parameters
-
-#### polyglot-syntax
-**Purpose:** Lexer, parser, AST for C-like languages
-
-**Key Types:**
-- `Lexer` - Tokenizer
-- `Parser` - Recursive descent parser
-- `AST` - Abstract syntax tree nodes
-- `Preprocessor` - C preprocessor handling
-
-#### polyglot-sema
-**Purpose:** Semantic analysis and type checking
-
-**Key Types:**
-- `Analyzer` - Semantic analysis driver
-- `TypeChecker` - Type inference and checking
-- `SymbolTable` - Scope management
-- `DiagnosticEmitter` - Error/warning reporting
-
-#### polyglot-core
-**Purpose:** Core types shared across crates
-
-**Key Types:**
-- `Span` - Source location tracking
-- `Diagnostic` - Structured diagnostics
-- `Symbol` - Interned identifiers
-- `FileId` - Source file identification
-
-#### polyglot-ir
-**Purpose:** MLIR lowering, optimization, printing
-
-**Key Types:**
-- `LoweringContext` - AST to MLIR lowering
-- `Optimizer` - MLIR optimization pipeline
-- `Printer` - MLIR textual output
+**Subcommands:** `build`, `run`, `check`, `emit-ir` and the internal
+`transmute-internal` (narrated source → AST → sema → IR → object walkthrough).
 
 ### 3. Plugin Architecture
 
-Plugins are standalone binaries communicating via **JSON-RPC 2.0 over stdio**.
+Plugins are standalone binaries communicating via **JSON-RPC 2.0 over
+stdio** (newline-delimited). The reference plugin is `polyglot-clang`
+(Rust), which compiles C/C++ by shelling out to `clang -S -emit-llvm` and
+returns the LLVM IR text to the driver.
 
 **Protocol Flow:**
 ```
 Driver                          Plugin
   │                                │
-  ├── Initialize(InitializeParams)▶│
-  │◀── InitializeResult ───────────┤
+  ├── initialize(InitializeParams)▶│
+  │◀── initialize result ──────────┤
   │                                │
-  ├── Compile(CompileParams) ─────▶│
-  │◀── CompileResult ──────────────┤
+  ├── compile(CompileParams) ─────▶│
+  │◀── compile result ─────────────┤
   │                                │
-  ├── Shutdown() ─────────────────▶│
-  │◀── ShutdownResult ─────────────┤
+  ├── shutdown ───────────────────▶│
+  │◀── shutdown result ────────────┤
 ```
 
 **Plugin Methods:**
 - `initialize` - Handshake, capability exchange
-- `compile` - Compile source to MLIR/object
+- `compile` - Compile source; returns `{mlir_module, diagnostics}` — for
+  `polyglot-clang` the `mlir_module` field carries LLVM IR text
 - `shutdown` - Cleanup
 
-### 4. Build Pipeline
+### 4. Build Pipeline (Python driver)
 
 ```
 Source Files (.c/.cpp)
@@ -213,21 +142,13 @@ Source Files (.c/.cpp)
          │
          ▼
 ┌──────────────────┐
-│  Select Compiler │
-│  clang/clang++   │
+│  Cache Lookup    │  .polyglot-cache/<sha256>.o
 └────────┬─────────┘
          │
          ▼
 ┌──────────────────┐
-│  Build Command   │
-│  -O<level>       │
-│  --target=...    │
-│  -o output       │
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────┐
-│  Execute Clang   │
+│  Compile (-j) &  │
+│  Link            │
 └────────┬─────────┘
          │
          ▼
@@ -240,17 +161,17 @@ Source Files (.c/.cpp)
 
 ### Configuration Flow
 ```
-polyglot.toml → TOML Parser → ProjectConfig → BuildEngine → Clang Args
+polyglot.toml → toml.load → [[bin]] / [language] / [compiler] keys → build inputs → compiler flags
 ```
 
 ### Compilation Flow
 ```
-Source Files → Driver → Clang → LLVM IR → Optimizations → Machine Code → Link → Binary
+Source Files → Driver (cache lookup) → gcc/clang → objects (-j parallel) → Link → Binary
 ```
 
-### Plugin Flow (Future)
+### Plugin Flow
 ```
-Source Files → Driver → JSON-RPC → Plugin → MLIR → Optimizations → Cranelift → Object → Link → Binary
+Source Files → Driver → JSON-RPC → polyglot-clang → LLVM IR text → Driver links → Binary
 ```
 
 ## Extension Points
@@ -258,55 +179,46 @@ Source Files → Driver → JSON-RPC → Plugin → MLIR → Optimizations → C
 ### 1. New Language Frontend
 Implement a plugin with:
 - `initialize` - Declare language support
-- `compile` - Parse source → emit MLIR
+- `compile` - Parse source → produce IR text
 
 ### 2. New Optimization Pass
-Add to `polyglot-mlir` pass pipeline:
-```rust
-pass_manager.add_pass(create_my_custom_pass());
-```
+Add it to the pass pipeline in `crates/polyglot-ir/src/opt.rs`.
 
-### 3. New Target Backend
-Extend `polyglot-codegen`:
-```rust
-impl TargetConfig for MyTarget { ... }
-```
+### 3. New Backend Emitter
+Extend `crates/polyglot-codegen` (`emit_ll` turns `polyglot-ir` modules into
+LLVM IR text; `emit_object` shells out to `llc -filetype=obj`).
 
 ### 4. New Driver Command
-Add subcommand in `polyglot`:
-```python
-def new_command(self, args):
-    # Implementation
-```
+Add a module under `polyglot_lib/commands/` and register it in
+`polyglot_lib/cli.py`.
 
 ## Performance Considerations
 
 ### Python Driver
-- Minimal overhead (direct Clang invocation)
-- No persistent processes
-- Temporary directory cleanup
+- Minimal overhead (direct compiler invocation)
+- sha256-keyed incremental object cache, `-j` parallel per-TU compilation
+- No persistent processes; temporary directory cleanup
 
-### Rust Crates (Library)
-- Zero-cost abstractions
-- MLIR C API (FFI overhead minimal)
-- Cranelift: fast codegen, good optimization
+### Rust Pipeline
+- Fully in-process frontend (no external compiler for C sources)
+- Zero-cost abstractions; textual LLVM IR as the exchange format
 
 ### Caching Strategy
-- Content-addressable storage
-- Key: hash(source + config + compiler_version)
+- Content-addressable storage in `.polyglot-cache/`
+- Key: hash of compiler path + version, exact flag list, source name and bytes, project directory
 - Invalidation: config change, compiler update
 
 ## Security Model
 
 ### Trust Boundaries
 ```
-User Code ──▶ Driver (trusted) ──▶ Clang (trusted) ──▶ Binary
+User Code ──▶ Driver (trusted) ──▶ Compiler (trusted) ──▶ Binary
                     │
                     ▼
-              Plugins (sandboxed)
-              - No filesystem access
-              - No network access
-              - Resource limits
+              Plugins (separate processes)
+              - Communicate over stdio only
+              - JSON-RPC input validation
+              - Handshake failure → exit 3
 ```
 
 ### Mitigations
@@ -315,37 +227,14 @@ User Code ──▶ Driver (trusted) ──▶ Clang (trusted) ──▶ Binary
 - Temporary files with secure random names
 - Plugin isolation via process boundaries
 
-## Future Architecture
-
-### Phase 1: MLIR Integration
-```
-Python Driver ──▶ JSON-RPC ──▶ polyglot-clang plugin ──▶ MLIR ──▶ polyglot-codegen ──▶ Native
-```
-
-### Phase 2: Incremental Compilation
-```
-Build Engine ──▶ polyglot-cache ──▶ CAS ──▶ Reuse artifacts
-```
-
-### Phase 3: Plugin Registry
-```
-Driver ──▶ polyglot-registry ──▶ Registry API ──▶ Download plugins
-```
-
-### Phase 4: LSP Integration
-```
-Editor ──▶ LSP ──▶ Driver ──▶ Diagnostics/Completions
-```
-
 ## Testing Strategy
 
 ### Unit Tests (Rust)
 - Per-crate tests in `crates/*/src/`
-- Run with `cargo test --lib --workspace`
+- Run with `cargo test --workspace`; `cargo clippy --workspace --all-targets -- -D warnings` must stay clean
 
 ### Integration Tests (Python)
 - `test_comprehensive.py` - End-to-end driver tests
-- Tests: build, run, check, emit-ir, emit-asm, clean, init, stats
 
 ### Benchmarks
 - `benchmark.py` - Performance regression detection
@@ -354,16 +243,11 @@ Editor ──▶ LSP ──▶ Driver ──▶ Diagnostics/Completions
 ## Deployment
 
 ### Python Driver
-- Single file (`polyglot`)
-- Dependencies: Python 3.8+, toml, Clang
-- Distribution: GitHub Releases, pip (future)
+- `polyglot_lib/` package + launcher; pip-installable (`pyproject.toml`)
+- Dependencies: Python 3.8+, toml, any one C compiler
+- Distribution: `pipx install git+https://github.com/RXVEN-1907/polyglot-compiler`, install.sh, or run from source
 
 ### Rust Binaries
-- Statically linked where possible
-- Dependencies: libzstd, libtinfo, libxml2 (system)
-- Distribution: GitHub Releases, cargo install (future)
-
-### Rust Libraries
-- Published to crates.io
-- Versioned with workspace version
-- MSRV: Rust 1.75+
+- Default build has zero system dependencies (no LLVM needed)
+- `--backend native` uses the system `llc`/`cc` when object code is wanted
+- Distribution: `cargo build --release` (CI artifacts)

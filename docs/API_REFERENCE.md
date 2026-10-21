@@ -1,7 +1,7 @@
 # Polyglot API Reference
 
 !!! note
-    This document predates the v0.2.0 driver rewrite. The maintained CLI reference lives in the mkdocs tree: `docs/reference/cli.md` (and `docs/user-guide/commands.md`). The global options below have since grown (`--quiet`, `--compiler {auto,clang,gcc}`, and per-command flags such as `build --sanitize/--shared/-j/--no-cache`, `fmt`, `tidy`, `watch`, `deps`, `preproc`).
+    This document covers only the original command subset. The maintained CLI reference lives in the mkdocs tree: `docs/reference/cli.md` (and `docs/user-guide/commands.md`) — the driver now ships 49 commands. The Rust library examples below were updated for the v0.3.0 rebuild (the experimental `polyglot-mlir`, `polyglot-cache` and `polyglot-registry` crates were removed).
 
 ## Python Driver CLI
 
@@ -342,7 +342,7 @@ polyglot version
 
 **Output:**
 ```
-polyglot 0.2.0
+polyglot 0.3.0
 ```
 
 **Exit Codes:**
@@ -439,65 +439,42 @@ let request = Request::new("initialize", params);
 let response = transport.send(request).await?;
 ```
 
-### polyglot-mlir
+### polyglot-ir
 
 ```rust
-use polyglot_mlir::{Context, Module, PassManager, Dialect};
+use polyglot_ir::{lower_program, optimize_module, print_module, OptLevel};
 
-// Create context with dialects
-let ctx = Context::new();
-ctx.load_dialect(Dialect::Arith);
-ctx.load_dialect(Dialect::Func);
-ctx.load_dialect(Dialect::MemRef);
-
-// Parse MLIR module
-let module = ctx.parse_module(mlir_text)?;
-
-// Run optimization passes
-let pm = PassManager::new(&ctx);
-pm.add_pass("canonicalize");
-pm.add_pass("cse");
-pm.add_pass("licm");
-pm.run(&module)?;
+// Lowering, optimization and printing live here:
+let mut module = lower_program(checked_program);      // sema output -> Module
+let stats = optimize_module(&mut module, OptLevel::Default); // pass pipeline
+let text = print_module(&module);                     // textual IR
 ```
 
 ### polyglot-codegen
 
 ```rust
-use polyglot_codegen::{CodegenBackend, TargetConfig, OptimizationLevel};
+use polyglot_codegen::{emit_ll, emit_object};
 
-let target = TargetConfig {
-    triple: "x86_64-unknown-linux-gnu".parse()?,
-    cpu: "generic".to_string(),
-    features: "+sse2,+avx".to_string(),
-    opt_level: OptimizationLevel::Default,
-};
+// polyglot-ir module -> LLVM IR text
+let ll_text = emit_ll(&module)?;
 
-let mut backend = CodegenBackend::new(target)?;
-let object_file = backend.compile_module(&module)?;
+// ... or straight to a real object file via `llc -filetype=obj`
+let object_path = emit_object(&module, std::path::Path::new("out.o"), "hello.c")?;
 ```
 
 ### polyglot-driver
 
 ```rust
-use polyglot_driver::{BuildEngine, ProjectConfig, PluginManager};
-
-let config = ProjectConfig::from_file("polyglot.toml")?;
-let engine = BuildEngine::new(config);
-let result = engine.build(BuildOptions::default()).await?;
+// clap CLI: build | run | check | emit-ir | transmute-internal
+// cargo run -p polyglot-driver -- build examples/01_hello.c
+let cli = polyglot_driver::cli::Cli::parse();
+polyglot_driver::run_simple_driver(cli).await?;
 ```
 
-### polyglot-cache
-
-```rust
-use polyglot_cache::{Cache, CacheKey};
-
-let cache = Cache::new("/tmp/polyglot-cache")?;
-let key = CacheKey::from_source(&source, &config);
-if let Some(entry) = cache.get(&key)? {
-    // Use cached result
-}
-```
+> **Note**: The experimental `polyglot-mlir`, `polyglot-cache` and
+> `polyglot-registry` crates were removed in 0.3.0; the working cache and
+> plugin clients live in the Python driver, and the active codegen path is
+> LLVM IR emission.
 
 ---
 
@@ -615,9 +592,9 @@ jobs:
 
 ## Version Compatibility
 
-| Polyglot | Python | Clang | Rust | MLIR |
-|----------|--------|-------|------|------|
-| 0.1.x | 3.8+ | 17+ | 1.75+ | 220 |
+| Polyglot | Python | Compiler | Rust (optional workspace) |
+|----------|--------|----------|---------------------------|
+| 0.3.x | 3.8+ | gcc or clang | 1.75+ |
 
 ---
 

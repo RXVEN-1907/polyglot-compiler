@@ -4,13 +4,13 @@
 
 ## File Location
 
-Polyglot reads `polyglot.toml` from the directory you build: `polyglot build` checks the current directory, `polyglot build path/to/project` checks that directory. There is no upward search and no `--project-dir` flag in v0.2.0.
+Polyglot reads `polyglot.toml` from the directory you build: `polyglot build` checks the current directory, `polyglot build path/to/project` checks that directory. There is no upward search and no `--project-dir` flag.
 
 ## Recognized Schema
 
 ```toml
 [project]
-name = "demo"             # informational in v0.2.0
+name = "demo"             # informational
 version = "0.1.0"         # informational
 
 [compiler]
@@ -63,8 +63,8 @@ error: polyglot.toml [compiler] cc = '/nonexistent/cc' does not resolve to an ex
 |-----|------|-------------|
 | `name` | string | Output name for the project executable |
 | `source` | string | Source file, relative to the config file's directory |
-| `cflags` | array | Reserved — not read in v0.2.0 |
-| `ldflags` | array | Reserved — not read in v0.2.0 |
+| `cflags` | array | Reserved — not read |
+| `ldflags` | array | Reserved — not read |
 
 Only the first `[[bin]]` table is used. Without `source`, the build falls back to the first `src/*.c` / `src/*.cpp` file.
 

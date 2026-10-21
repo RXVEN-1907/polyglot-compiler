@@ -134,7 +134,7 @@ Frontend →
 
 ## Per-Project Optimization
 
-The optimization level is a CLI-only option in v0.2.0 (`polyglot --opt-level ...`). The `opt_level` key that `polyglot init` writes into `polyglot.toml` under `[target]` is reserved but not yet honored. Per-file flags can be passed with `--cc-arg`:
+The optimization level is a CLI-only option (`polyglot --opt-level ...`). The `opt_level` key that `polyglot init` writes into `polyglot.toml` under `[target]` is reserved but not yet honored. Per-file flags can be passed with `--cc-arg`:
 
 ```bash
 polyglot build --cc-arg=-O3 --cc-arg=-march=native hot.c -o hot

@@ -1,6 +1,6 @@
 # Tool Integrations
 
-Polyglot 0.2.0 wraps the auxiliary tools that ship with LLVM so you do not have to remember their flags or their install locations. `polyglot doctor` shows which of these tools it found (clang tools can be discovered off `PATH` in scan directories such as `~/llvm-install/*/bin`).
+Polyglot wraps the auxiliary tools that ship with LLVM so you do not have to remember their flags or their install locations. `polyglot doctor` shows which of these tools it found (clang tools can be discovered off `PATH` in scan directories such as `~/llvm-install/*/bin`).
 
 | Tool | Command | Backing binary |
 |------|---------|----------------|

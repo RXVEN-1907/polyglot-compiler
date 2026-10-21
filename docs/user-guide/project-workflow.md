@@ -91,7 +91,7 @@ source = "tests/test_main.c"
 cflags = ["-DTEST_MODE", "-O0", "-g"]
 ```
 
-> **Note**: in v0.2.0 the driver honors `[[bin]]` `name`/`source`, `[language]` and
+> **Note**: the driver honors `[[bin]]` `name`/`source`, `[language]` and
 > `[compiler]`; the other keys shown above (`cflags`, `ldflags`, `[target]`,
 > `[plugins]`) are reserved and not yet applied at build time — pass those flags
 > on the command line instead (see [Configuration](../reference/configuration.md)).
@@ -322,7 +322,7 @@ cxx = "/usr/bin/clang++-17"
 ### 3. Separate Debug/Release Configs
 
 ```bash
-# Debug build (flags are CLI options in v0.2.0)
+# Debug build (flags are CLI options)
 polyglot build --debug --sanitize address src/main.c -o my-app-debug
 
 # Release build
@@ -332,7 +332,7 @@ polyglot --opt-level aggressive build src/main.c -o my-app
 ### 4. Use Environment Variables for CI
 
 ```bash
-# Only POLYGLOT_CC / POLYGLOT_CXX are read in v0.2.0
+# Only POLYGLOT_CC / POLYGLOT_CXX are read
 export POLYGLOT_CC="/usr/bin/aarch64-linux-gnu-gcc"
 
 polyglot doctor --strict   # preflight the toolchain

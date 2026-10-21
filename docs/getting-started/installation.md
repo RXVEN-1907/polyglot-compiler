@@ -4,37 +4,38 @@
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| Python | 3.8+ | Required for driver |
-| GCC or clang | any recent version | For C/C++ compilation — clang is **not** required; the driver auto-discovers whichever is available, including clang installs outside `PATH` |
-| toml (Python) | Latest | `pip install toml` |
-| Rust | 1.75+ | Optional, for `--language rust` projects and library crates |
+| Python | 3.8+ | Required for the driver |
+| toml (Python) | Latest | Installed automatically by pipx/pip; `pip install toml` when running from source |
+| A C compiler | any recent version | gcc or clang — the driver auto-discovers whichever is available, including clang installs outside `PATH` |
 
-### System Dependencies (Ubuntu/Debian)
+That is all the Python driver needs: the standard library, the `toml` package, and any one C compiler. clang is **not** required.
 
-```bash
-sudo apt-get update && sudo apt-get install -y \
-    python3 python3-pip \
-    clang-17 llvm-17 lld-17 \
-    libzstd-dev libtinfo-dev libxml2-dev  # For Rust binaries
-```
+## Quick Install (pipx)
 
-### System Dependencies (macOS)
+The driver is a proper Python package, so the fastest route is pipx (isolated, on your `PATH`, stdlib + `toml` only):
 
 ```bash
-brew install python3 llvm@17
-pip install toml
+pipx install git+https://github.com/RXVEN-1907/polyglot-compiler
+
+# Verify
+polyglot version
+# polyglot 0.3.0
 ```
 
-### System Dependencies (Windows)
+Without pipx, plain pip works the same way: `pip install git+https://github.com/RXVEN-1907/polyglot-compiler`.
 
-Use WSL2 with Ubuntu, or install:
-- Python from python.org
-- LLVM from llvm.org
-- `pip install toml`
+## Alternative: install.sh (Linux/macOS)
 
----
+The repo ships an installer that places the launcher plus the `polyglot_lib` package into a user prefix (default `~/.local/bin`, no superuser required):
 
-## Quick Install
+```bash
+curl -fsSL https://raw.githubusercontent.com/RXVEN-1907/polyglot-compiler/master/install.sh -o install.sh
+./install.sh          # add --prefix DIR to choose a location, --uninstall to remove
+```
+
+It checks `python3 >= 3.8`, offers to install the `toml` package when missing, and looks for a C backend (clang or gcc; `POLYGLOT_CC` overrides).
+
+## From Source
 
 ```bash
 # Clone repository
@@ -52,18 +53,8 @@ export PATH="$PWD:$PATH"
 
 # Verify
 polyglot version
-# polyglot 0.2.0
+# polyglot 0.3.0
 ```
-
----
-
-## One-Line Install (Linux/macOS)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/RXVEN-1907/polyglot-compiler/master/polyglot -o polyglot && chmod +x polyglot && pip install toml
-```
-
----
 
 ## Verify Installation
 
@@ -87,14 +78,11 @@ polyglot doctor
 
 ---
 
-## Building Rust Components (Optional)
+## Building the Rust Driver (Optional)
 
-The Rust workspace crates implement an in-process pipeline (parse -> sema -> lower -> optimize -> print IR) plus MLIR/Cranelift library scaffolding.
+The Rust workspace (7 crates + 1 plugin) implements an in-process pipeline (parse → sema → lower → optimize → LLVM IR emission). Its **default build has zero system dependencies** — no system LLVM is needed.
 
 ```bash
-# Install additional dependencies
-sudo apt-get install -y libzstd-dev libtinfo-dev libxml2-dev
-
 # Build all workspace crates
 cargo build --workspace
 
@@ -102,7 +90,7 @@ cargo build --workspace
 cargo run -p polyglot-driver -- emit-ir examples/01_hello.c
 ```
 
-> **Note**: The Python driver works independently and provides full C/C++ compilation functionality. The Rust components are for advanced MLIR/Cranelift integration.
+> **Note**: The Python driver works independently and provides full C/C++ compilation functionality. The Rust components are a self-contained compiler lab: `--backend native` uses the system `llc`/`cc` only when real object code is wanted.
 
 ---
 

@@ -1,27 +1,29 @@
 # Python Driver Architecture
 
 !!! note
-    This page describes the v0.2.0 driver. The full command/flag reference lives in the [Commands Reference](../user-guide/commands.md).
+    This page describes the driver as of v0.3.0, where the implementation lives in the `polyglot_lib/` package. The full command/flag reference lives in the [Commands Reference](../user-guide/commands.md).
 
 ## Overview
 
-The Python driver (`polyglot`) is the user-facing entry point: a single-file Python 3 executable (~1,760 lines) that depends only on the standard library plus the `toml` package. It wraps whatever C/C++ toolchain it discovers — GCC or clang — and dispatches to the LLVM auxiliary tools (`clang-format`, `clang-tidy`, `llvm-mca`, `lli`, `clang-repl`) when those commands need them.
+The Python driver (`polyglot`) is the user-facing entry point: a thin launcher plus the `polyglot_lib` package (~2,500 lines) that depends only on the standard library plus the `toml` package. It wraps whatever C/C++ toolchain it discovers — GCC or clang — and dispatches to the LLVM auxiliary tools (`clang-format`, `clang-tidy`, `llvm-mca`, `lli`, `clang-repl`) and the binary inspection tools (`nm`, `objdump`, `readelf`, `size`, `strings`, `strip`, `addr2line`, `c++filt`) when those commands need them.
 
 ## Module Structure
 
-The file is organized top-to-bottom in sections:
+The `polyglot` launcher only makes the `polyglot_lib` package importable and calls its `main()`. The package is organized by responsibility:
 
 ```
-polyglot
-├── Constants & tables           # tool name lists, KNOWN_TARGETS, opt maps, exit codes
-├── Output & error helpers       # color handling (NO_COLOR), PolyglotError, MissingToolError
-├── Toolchain class              # compiler/tool discovery, version detection, project config
-├── Flag construction            # validate_std, common_compile_args, link_args
-├── BuildCache class             # sha256-keyed incremental object cache
-├── Project resolution           # find_project_dir, project_sources_and_output, rust builds
-├── Command functions            # cmd_build, cmd_run, ..., cmd_version
-├── Statistics                   # parse_time_report (gcc/clang formats), binary_size
-├── CLI                          # build_parser, _find_subcommand, _split_at_ddash, main()
+polyglot                     # thin launcher (sys.path setup + main())
+polyglot_lib/
+├── cli.py                   # argparse parser, dispatch, exit-code translation
+├── toolchain.py             # Toolchain class: compiler/tool discovery, project config
+├── backends.py              # backend-aware flag translation (gcc/clang/rustc) + compile/link machinery
+├── cache.py                 # BuildCache: sha256-keyed incremental object cache
+├── config.py                # project-dir lookup, [[bin]]/[[lib]]/[language] resolution
+├── output.py                # color handling (NO_COLOR), PolyglotError, MissingToolError
+├── inspection_cache.py      # shared cache for binary-inspection results
+├── preview_assets.py        # assets for the local Compiler Explorer (preview)
+├── plugin_client.py         # JSON-RPC stdio client for plugins
+└── commands/                # one module per command (auto-registered via register())
 ```
 
 ## Toolchain Discovery (`Toolchain`)

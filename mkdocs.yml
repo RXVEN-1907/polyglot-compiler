@@ -54,6 +54,8 @@ nav:
   - Architecture:
       - Overview: architecture/overview.md
       - Python Driver: architecture/python-driver.md
+  - Development:
+      - Development Guide: development/development.md
 
 markdown_extensions:
   - pymdownx.highlight:

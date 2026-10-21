@@ -23,7 +23,7 @@ name = "demo"
 source = "src/main.c"
 ```
 
-## Keys the v0.2.0 Driver Honors
+## Keys the Driver Honors
 
 | Section | Key | Effect |
 |---------|-----|--------|
@@ -84,7 +84,7 @@ with a sample `src/main.rs`. `polyglot build` in that directory invokes `rustc` 
 2. `polyglot.toml` `[compiler] cc` / `cxx`
 3. Toolchain auto-discovery: `--compiler` > `PATH` > scan directories (lowest)
 
-CLI flags (`--opt-level`, `--target`, `-o`, compile flags) are not configurable via TOML in v0.2.0 — they are CLI-only.
+CLI flags (`--opt-level`, `--target`, `-o`, compile flags) are not configurable via TOML — they are CLI-only.
 
 ## Validation
 

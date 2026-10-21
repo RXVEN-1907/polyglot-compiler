@@ -61,7 +61,10 @@ cd my-app && polyglot build && ./my-app
 ## 📦 Installation
 
 ```bash
-# Clone and setup
+# Install with pipx (stdlib + toml only)
+pipx install git+https://github.com/RXVEN-1907/polyglot-compiler
+
+# ... or clone and run from source
 git clone https://github.com/RXVEN-1907/polyglot-compiler
 cd polyglot-compiler
 pip install toml
@@ -69,7 +72,7 @@ chmod +x polyglot
 
 # Verify
 polyglot version
-# Output: polyglot 0.2.0
+# Output: polyglot 0.3.0
 ```
 
 [Get Started →](getting-started/installation.md)
@@ -93,7 +96,7 @@ Polyglot uses a **dual-layer architecture**:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Advanced**: an 11-crate Rust workspace implements an in-process pipeline (parse → sema → lower → optimize → IR print) plus MLIR→Cranelift library scaffolding for future native compilation.
+**Advanced**: a 7-crate Rust workspace (+1 reference plugin) implements an in-process pipeline (parse → sema → lower → optimize → LLVM IR emission) with a clap CLI driver. The experimental MLIR/Cranelift paths were removed in 0.3.0; the active path is LLVM IR emission, and the default Rust build needs no system LLVM.
 
 [Architecture Overview →](architecture/overview.md)
 
@@ -122,9 +125,9 @@ Polyglot uses a **dual-layer architecture**:
 | IR/ASM Emission | ✅ Working |
 | Statistics | ✅ Working |
 | Project Config | ✅ Working |
-| Rust Library Crates | ✅ 10/10 compile |
-| MLIR Pipeline | 🔧 Library only |
-| Plugin System | 🔧 Protocol ready |
+| Rust Workspace | ✅ 7 crates + 1 plugin build clean |
+| LLVM IR Emission | ✅ Working (Rust pipeline) |
+| Plugin System | ✅ Working (`polyglot-clang`) |
 
 ---
 
@@ -146,7 +149,6 @@ MIT License - see [LICENSE](https://github.com/RXVEN-1907/polyglot-compiler/blob
 
 ## 🙏 Acknowledgments
 
-- **LLVM/MLIR Team** - Incredible compiler infrastructure
-- **Cranelift Team** - Fast, safe codegen backend
+- **LLVM Team** - Incredible compiler infrastructure
 - **Clang Team** - Production-grade C/C++ frontend
 - **Rust Community** - Excellent ecosystem

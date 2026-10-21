@@ -2,6 +2,16 @@
 
 Polyglot does **not** require clang to be on your `PATH`. The driver discovers whatever C/C++ toolchain you have — GCC or clang, on or off `PATH` — and reports exactly what it found.
 
+## Install
+
+If you have not installed the driver yet, the fastest route is pipx:
+
+```bash
+pipx install git+https://github.com/RXVEN-1907/polyglot-compiler
+```
+
+See [Installation](installation.md) for the pip route, `install.sh`, from-source setup, and prerequisites (Python 3.8+, `toml`, any one C compiler).
+
 ## Step 0: Run the Doctor
 
 The first command to run is `polyglot doctor`. It inventories your compilers and auxiliary tools and tells you how to fix anything missing:
@@ -11,7 +21,7 @@ $ polyglot doctor
 ==============================================================
 POLYGLOT ENVIRONMENT REPORT (doctor)
 ==============================================================
-  driver          polyglot 0.2.0 (python 3.12.6)
+  driver          polyglot 0.3.0 (python 3.12.6)
   ok   C compiler     /bin/gcc [gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0]
   ok   C++ compiler   /bin/g++
   backend         gcc

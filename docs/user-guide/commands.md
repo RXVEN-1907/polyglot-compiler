@@ -1,41 +1,73 @@
 # Commands Reference
 
-Every command below is documented from the actual `polyglot <command> --help` output of the v0.2.0 driver. The full command set:
+Every command below is documented from the actual `polyglot <command> --help` output of the v0.3.0 driver. The full command set (49 commands, in `polyglot --help` order; the per-command sections on this page cover the core commands in depth — see the [CLI Reference](../reference/cli.md) for every command's options):
 
 | Command | Description |
 |---------|-------------|
 | `build` | Build a source file or project |
-| `run` | Build and run a source file |
+| `recommend` | Provide optimization and configuration recommendations |
+| `inspect` | Provide correlated views of binary information using multiple tools |
+| `run` | Build and run a source file (extra args after `--`) |
+| `secopt` | Provide security-aware optimization analysis and recommendations |
 | `check` | Check syntax without building |
 | `emit-ir` | Emit LLVM IR (clang) or GIMPLE (gcc) |
+| `explain-ir` | Show IR with the source of each function beside it |
 | `emit-asm` | Emit assembly |
+| `diff-asm` | Diff assembly across optimization levels |
 | `preproc` | Run the preprocessor (`-E`) |
 | `deps` | Emit Make-style dependencies (`-MM`) |
+| `graph` | Render the `#include` graph of source files |
 | `doctor` | Report on the toolchain environment |
+| `plugin` | Manage JSON-RPC plugins (`list`/`install`/`remove`/`info`/`publish`) |
 | `targets` | List known target triples and availability |
 | `fmt` | Format code with clang-format |
 | `tidy` | Lint with clang-tidy (extra args after `--`) |
 | `repl` | Interactive clang-repl (args after `--`) |
 | `jit` | Run a `.ll`/`.bc` with lli (args after `--`) |
+| `compile-commands` | Generate compilation database for tooling (clangd, clang-tidy, etc.) |
+| `diagnose` | Compare diagnostics from multiple compilers |
 | `mca` | Analyze machine code with llvm-mca |
+| `lsp` | Launch the clangd language server (project flags applied) |
 | `analyze` | clang static analyzer (`--analyze`) |
+| `nm` | List symbols in object files |
+| `fuzz` | Fuzz a function with libFuzzer (clang only) |
+| `preview` | Local Compiler Explorer: edit and compile in a browser tab |
+| `size` | Show section sizes of object files |
+| `fixit` | Automatically apply safe fixes to compilation errors |
+| `objdump` | Display information from object files |
 | `watch` | Rebuild on file changes |
+| `bench` | Build once, then time repeated program runs |
+| `readelf` | Display the contents of ELF files |
+| `pgo` | Profile-guided optimization (clang `-fprofile-instr` workflow) |
+| `debug` | Build with debug info and launch debugger (lldb/gdb) |
 | `stats` | Compilation statistics |
+| `strip` | Strip symbols from object files |
+| `transmute` | Show the step-by-step compilation process with explanations |
+| `strings` | Display printable strings from files |
+| `addr2line` | Convert addresses to file names and line numbers |
+| `cache` | Manage inspection cache (`stats`/`clear`/`info`) |
 | `init` | Initialize a new project |
+| `c++filt` | Demangle C++ and Rust symbols |
 | `clean` | Remove build artifacts and cache |
+| `completions` | Emit shell completion scripts (bash/zsh/fish) |
 | `version` | Show version and backend |
+| `query` | Unified inspection interface for all polyglot inspection capabilities |
 
 ## Global Options
 
 Options go **before** the command name:
 
 ```console
-usage: polyglot [-h] [-v] [--quiet] [--target TARGET]
+usage: polyglot [-h] [--version] [-v] [--quiet] [--target TARGET]
                 [--opt-level {none,less,default,aggressive,size,size-aggressive}]
                 [-o OUTPUT] [--plugin PLUGIN] [--plugin-dir PLUGIN_DIR]
                 [--compiler {auto,clang,gcc}]
-                {build,run,check,emit-ir,emit-asm,preproc,deps,doctor,targets,fmt,tidy,
-                 repl,jit,mca,analyze,watch,stats,init,clean,version} ...
+                {build,recommend,inspect,run,secopt,check,emit-ir,explain-ir,
+                 emit-asm,diff-asm,preproc,deps,graph,doctor,plugin,targets,
+                 fmt,tidy,repl,jit,compile-commands,diagnose,mca,lsp,analyze,
+                 nm,fuzz,preview,size,fixit,objdump,watch,bench,readelf,pgo,
+                 debug,stats,strip,transmute,strings,addr2line,cache,init,
+                 c++filt,clean,completions,version,query} ...
 ```
 
 | Option | Description |
@@ -317,7 +349,7 @@ usage: polyglot version [-h]
 
 ```console
 $ polyglot version
-polyglot 0.2.0
+polyglot 0.3.0
 backend: /bin/gcc (gcc, gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0)
 run polyglot doctor for details
 ```

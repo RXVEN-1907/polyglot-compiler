@@ -1,5 +1,6 @@
 """The 'verify' command: check that the toolchain can produce a valid object."""
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -42,3 +43,9 @@ def cmd_verify(tc, args):
             raise PolyglotError("compilation succeeded but object file missing or empty")
 
         print("Toolchain verification successful: produced", obj)
+
+
+def register(subparsers, global_flags):
+    p = subparsers.add_parser(
+        "verify", help="Verify the toolchain compiles a tiny program to an object")
+    global_flags.add_common_flags(p)
