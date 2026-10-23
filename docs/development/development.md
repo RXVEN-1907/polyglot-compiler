@@ -16,7 +16,7 @@ pip install toml pytest
 rustup default stable
 ```
 
-A C compiler (gcc or clang) must be discoverable — that is the only runtime dependency of the Python driver.
+A C compiler (gcc or clang) must be discoverable. That is the only runtime dependency of the Python driver.
 
 ## Layout
 
@@ -54,7 +54,7 @@ mkdocs build --strict
 
 ## Visuals
 
-The logo, mode banners, social preview, demo GIFs and the cache chart are generated from committed scripts in `scripts/` — regenerate and commit the output after changing them:
+The logo, mode banners, social preview, demo GIFs and the cache chart are generated from committed scripts in `scripts/`. Regenerate and commit the output after changing them:
 
 ```bash
 python3 scripts/gen_logo.py          # logo (self-adapting)

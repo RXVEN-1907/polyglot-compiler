@@ -1,7 +1,7 @@
 # Polyglot Compiler Architecture
 
 !!! note
-    This is the architecture description for the v0.3.0 rebuild. The maintained documentation tree is under `docs/` (built with mkdocs) — start at [Architecture Overview](architecture/overview.md) for the driver side and [Python Driver](architecture/python-driver.md) for internals.
+    This is the architecture description for the v0.3.0 rebuild. The maintained documentation tree is under `docs/` (built with mkdocs). Start at [Architecture Overview](architecture/overview.md) for the driver side and [Python Driver](architecture/python-driver.md) for internals.
 
 ## Overview
 
@@ -120,7 +120,7 @@ Driver                          Plugin
 
 **Plugin Methods:**
 - `initialize` - Handshake, capability exchange
-- `compile` - Compile source; returns `{mlir_module, diagnostics}` — for
+- `compile` - Compile source; returns `{mlir_module, diagnostics}`. For
   `polyglot-clang` the `mlir_module` field carries LLVM IR text
 - `shutdown` - Cleanup
 

@@ -6,7 +6,7 @@
 |-------------|---------|-------|
 | Python | 3.8+ | Required for the driver |
 | toml (Python) | Latest | Installed automatically by pipx/pip; `pip install toml` when running from source |
-| A C compiler | any recent version | gcc or clang — the driver auto-discovers whichever is available, including clang installs outside `PATH` |
+| A C compiler | any recent version | gcc or clang: the driver auto-discovers whichever is available, including clang installs outside `PATH` |
 
 That is all the Python driver needs: the standard library, the `toml` package, and any one C compiler. clang is **not** required.
 
@@ -80,7 +80,7 @@ polyglot doctor
 
 ## Building the Rust Driver (Optional)
 
-The Rust workspace (7 crates + 1 plugin) implements an in-process pipeline (parse → sema → lower → optimize → LLVM IR emission). Its **default build has zero system dependencies** — no system LLVM is needed.
+The Rust workspace (7 crates + 1 plugin) implements an in-process pipeline (parse → sema → lower → optimize → LLVM IR emission). Its **default build has zero system dependencies**. No system LLVM is needed.
 
 ```bash
 # Build all workspace crates
@@ -98,7 +98,7 @@ cargo run -p polyglot-driver -- emit-ir examples/01_hello.c
 
 ### `clang not found in PATH`
 
-Not an error — the driver falls back to gcc and also scans well-known install locations (`~/llvm-install/*/bin`, `/usr/lib/llvm-*/bin`, `/usr/local/bin`, `/opt/*/bin`). Run `polyglot doctor` to see what was found and where. To use a specific compiler:
+Not an error. The driver falls back to gcc and also scans well-known install locations (`~/llvm-install/*/bin`, `/usr/lib/llvm-*/bin`, `/usr/local/bin`, `/opt/*/bin`). Run `polyglot doctor` to see what was found and where. To use a specific compiler:
 
 ```bash
 # Pin by environment variable (highest precedence)

@@ -1,6 +1,6 @@
 # Configuration Reference
 
-`polyglot.toml` — the project configuration file, in TOML format.
+`polyglot.toml` is the project configuration file, in TOML format.
 
 ## File Location
 
@@ -36,7 +36,7 @@ ldflags = ["-lm"]         # reserved (not yet honored)
 
 ## Key Reference
 
-### `[compiler]` — honored
+### `[compiler]`: honored
 
 | Key | Type | Description |
 |-----|------|-------------|
@@ -51,24 +51,24 @@ error: polyglot.toml [compiler] cc = '/nonexistent/cc' does not resolve to an ex
 
 `POLYGLOT_CC` / `POLYGLOT_CXX` environment variables override both keys.
 
-### `[language]` — honored
+### `[language]`: honored
 
 | Key | Type | Description |
 |-----|------|-------------|
 | `rust` | bool | When `true`, the project builds `src/main.rs` via `rustc` (see below). |
 
-### `[[bin]]` — `name` and `source` honored
+### `[[bin]]`: `name` and `source` honored
 
 | Key | Type | Description |
 |-----|------|-------------|
 | `name` | string | Output name for the project executable |
 | `source` | string | Source file, relative to the config file's directory |
-| `cflags` | array | Reserved — not read |
-| `ldflags` | array | Reserved — not read |
+| `cflags` | array | Reserved, not read |
+| `ldflags` | array | Reserved, not read |
 
 Only the first `[[bin]]` table is used. Without `source`, the build falls back to the first `src/*.c` / `src/*.cpp` file.
 
-### `[project]`, `[target]`, `[plugins]` — reserved
+### `[project]`, `[target]`, `[plugins]`: reserved
 
 Written by `polyglot init` and accepted by the parser, but not yet honored when building. Set target and optimization on the command line (`polyglot --target ... --opt-level ... build`).
 

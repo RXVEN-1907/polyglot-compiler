@@ -14,7 +14,7 @@ dependencies in the default build.
 
 ### Added
 
-- `pyproject.toml`: the driver is pip-installable —
+- `pyproject.toml`: the driver is pip-installable:
   `pipx install git+https://github.com/RXVEN-1907/polyglot-compiler`
   now works, with a `polyglot` entry point (stdlib + `toml` only).
 - `transmute-internal` on the Rust driver: narrated step-by-step
@@ -22,13 +22,13 @@ dependencies in the default build.
 - Binary inspection commands land as first-class citizens: `inspect`
   and `query` correlated multi-tool views, `fixit`, `diagnose`,
   `secopt`, `verify`, `transmute`, `compile-commands`, `addr2line`,
-  `cxxfilt`, `strings`, `debug` — the full 49-command surface is now
+  `cxxfilt`, `strings`, `debug`: the full 49-command surface is now
   actually committed.
 - Friendlier directory-build error (points at polyglot.toml or the
   explicit multi-source form).
 - A visual identity generated from committed scripts (`scripts/`):
   self-adapting logo, social preview, three mode banners (FORGE amber /
-  INSPECT slate green / TRANSMUTE crimson — one accent per canvas,
+  INSPECT slate green / TRANSMUTE crimson: one accent per canvas,
   lavender everywhere), two real-output demo GIFs, and a measured cache
   chart.
 

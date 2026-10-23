@@ -7,7 +7,7 @@ Pass the global `--target` option with a target triple and polyglot routes it to
 - **clang** passes `--target=<triple>` straight to clang. Compiling for a foreign target also needs that target's sysroot and libc for anything that includes system headers or links.
 - **gcc** can only build for the host triple. A non-host target aborts with exit code 1 and a hint to install the matching cross GCC (e.g. `aarch64-linux-gnu-gcc`) or use `--compiler clang`.
 
-Run `polyglot targets` first — it lists every known triple with its status for your current backend (`native`, `needs-cross-gcc`, `unavailable`).
+Run `polyglot targets` first. It lists every known triple with its status for your current backend (`native`, `needs-cross-gcc`, `unavailable`).
 
 ## Supported Targets
 
@@ -25,7 +25,7 @@ There are no short aliases: pass the full triple.
 
 ### Strategy 1: cross GCC via `POLYGLOT_CC`
 
-Install the cross toolchain and point polyglot's compiler discovery at it — full compile *and* link in one step:
+Install the cross toolchain and point polyglot's compiler discovery at it. Full compile *and* link in one step:
 
 ```bash
 sudo apt-get install gcc-aarch64-linux-gnu libc6-dev-arm64-cross
@@ -78,7 +78,7 @@ sudo apt-get install gcc-aarch64-linux-gnu libc6-dev-arm64-cross
 POLYGLOT_CC=/usr/bin/aarch64-linux-gnu-gcc polyglot build hello.cpp -o hello-arm64
 ```
 
-For C++ sources set the C++ compiler too — discovery searches `clang++`/`g++` independently of `POLYGLOT_CC`:
+For C++ sources set the C++ compiler too; discovery searches `clang++`/`g++` independently of `POLYGLOT_CC`:
 
 ```bash
 POLYGLOT_CC=/usr/bin/aarch64-linux-gnu-gcc \
@@ -166,6 +166,6 @@ jobs:
 
 ## Next Steps
 
-- [Targets Reference](../reference/targets.md) — triple list and the `polyglot targets` command
-- [Optimization](optimization.md) — target-specific optimization
-- [Tool Integrations](tools.md) — compiler tooling around the build
+- [Targets Reference](../reference/targets.md): triple list and the `polyglot targets` command
+- [Optimization](optimization.md): target-specific optimization
+- [Tool Integrations](tools.md): compiler tooling around the build

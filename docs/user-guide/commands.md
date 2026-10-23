@@ -1,6 +1,6 @@
 # Commands Reference
 
-Every command below is documented from the actual `polyglot <command> --help` output of the v0.3.0 driver. The full command set (49 commands, in `polyglot --help` order; the per-command sections on this page cover the core commands in depth — see the [CLI Reference](../reference/cli.md) for every command's options):
+Every command below is documented from the actual `polyglot <command> --help` output of the v0.3.0 driver. The full command set (49 commands, in `polyglot --help` order; the per-command sections on this page cover the core commands in depth, see the [CLI Reference](../reference/cli.md) for every command's options):
 
 | Command | Description |
 |---------|-------------|
@@ -111,11 +111,11 @@ usage: polyglot build [-h] [-o OUTPUT] [--std STD] [--warn {none,default,all,ext
                       [paths ...]
 ```
 
-- `paths` — source files or project directory
-- `--shared` — build a shared library
-- `--static-lib` — build a static library (`ar rcs`)
-- `-j JOBS`, `--jobs JOBS` — parallel per-TU compilation
-- `--no-cache` — bypass the incremental object cache
+- `paths`: source files or project directory
+- `--shared`: build a shared library
+- `--static-lib`: build a static library (`ar rcs`)
+- `-j JOBS`, `--jobs JOBS`: parallel per-TU compilation
+- `--no-cache`: bypass the incremental object cache
 
 ```bash
 polyglot build hello.c -o hello
@@ -134,7 +134,7 @@ usage: polyglot run [-h] [--std STD] [--warn ...] [--werror] [--debug] [--saniti
                     file
 ```
 
-`file` — source file to run. Program arguments go after a `--` separator:
+`file`: source file to run. Program arguments go after a `--` separator:
 
 ```bash
 polyglot run hello.c
@@ -181,7 +181,7 @@ usage: polyglot emit-asm [-h] [-o OUTPUT] [--intel] [--std STD] [--warn ...] [--
                          paths [paths ...]
 ```
 
-`--intel` — Intel syntax (`-masm=intel`).
+`--intel`: Intel syntax (`-masm=intel`).
 
 ```bash
 polyglot emit-asm hello.c -o hello.s --intel
@@ -249,10 +249,10 @@ usage: polyglot fmt [-h] [--style {llvm,google,chromium,mozilla,webkit,microsoft
                     [--check] [-i] [--dump-config] paths [paths ...]
 ```
 
-- `--style` — clang-format style (default `llvm`)
-- `--check` — exit `1` if any file would change
-- `-i` — format files in place
-- `--dump-config` — print the style config and exit (requires a `paths` argument)
+- `--style`: clang-format style (default `llvm`)
+- `--check`: exit `1` if any file would change
+- `-i`: format files in place
+- `--dump-config`: print the style config and exit (requires a `paths` argument)
 
 See [Tool Integrations](tools.md#formatting-with-fmt).
 
@@ -297,7 +297,7 @@ usage: polyglot mca [-h] [--iterations ITERATIONS] [--mcpu MCPU] [--std STD] [--
 usage: polyglot analyze [-h] paths [paths ...]
 ```
 
-clang static analyzer (`--analyze`). Requires the clang backend — with GCC discovered, it exits with a hint:
+clang static analyzer (`--analyze`). Requires the clang backend; with GCC discovered, it exits with a hint:
 
 ```
 error: the static analyzer requires the clang backend (retry with: polyglot --compiler clang analyze ...)
@@ -371,7 +371,7 @@ run polyglot doctor for details
 
 ## Plugin Architecture
 
-`build` can hand compilation to a **plugin** — a separate executable that
+`build` can hand compilation to a **plugin**, a separate executable that
 speaks the JSON-RPC 2.0 protocol implemented by
 [`crates/polyglot-protocol`](../../crates/polyglot-protocol) (protocol
 version `0.1.0`, `PROTOCOL_VERSION` in `crates/polyglot-protocol/src/types.rs`).
@@ -397,7 +397,7 @@ An explicit `--plugin` is mandatory: if it cannot be found, or the
 `cargo build` command above. Plugins listed in `polyglot.toml`
 `[plugins]` are best-effort: a missing or unusable one prints a warning and
 the build falls back to the direct compiler. Without `--plugin` (and
-without `[plugins]`), nothing changes — the direct compiler is used.
+without `[plugins]`), nothing changes: the direct compiler is used.
 
 ### Wire protocol
 
@@ -405,7 +405,7 @@ Newline-delimited JSON-RPC 2.0 on the plugin's stdin/stdout (one JSON
 object per line); the plugin's logs go to stderr. Methods: `initialize`,
 `compile`, `shutdown` (requests) and `exit` (notification). A `compile`
 request carries `{source_path, args, target_triple, opt_level, ...}` and
-returns `{mlir_module, diagnostics}` — for `polyglot-clang`, `mlir_module`
+returns `{mlir_module, diagnostics}`. For `polyglot-clang`, `mlir_module`
 is LLVM IR text (emitted via `clang -S -emit-llvm`). Compilation errors
 come back as JSON-RPC error `-32001` with clang's diagnostics, which the
 driver prints verbatim and exits `1`.

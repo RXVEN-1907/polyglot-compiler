@@ -1,6 +1,6 @@
 # Contributing to Polyglot Compiler
 
-Thank you for your interest in contributing to Polyglot! This document provides guidelines and information for contributors.
+Thank you for your interest in contributing to Polyglot. This document provides guidelines and information for contributors.
 
 ## 📋 Table of Contents
 
@@ -373,4 +373,4 @@ Driver (Python)          Plugin (Rust binary)
 
 ---
 
-Thank you for contributing to Polyglot! 🎉
+Thank you for contributing to Polyglot.

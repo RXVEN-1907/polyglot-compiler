@@ -9,7 +9,7 @@ Every `build` (and every `run`) first compiles to an object file. Those objects 
 Each object is stored as `.polyglot-cache/<sha256>.o` where the SHA-256 key is computed over a payload containing:
 
 - the compiler path and version (switching gcc ↔ clang, or upgrading, invalidates),
-- the exact flag list (e.g. `-std=c17 -O2` — changing `--opt-level` or `--std` produces a different key),
+- the exact flag list (e.g. `-std=c17 -O2`; changing `--opt-level` or `--std` produces a different key),
 - the source file name and its bytes (hashed directly for files under 4 MiB, or hashed-of-hash for larger ones),
 - the resolved project directory.
 
@@ -49,7 +49,7 @@ polyglot clean             # removes artifacts AND clears .polyglot-cache/
 polyglot build --no-cache  # one-off full recompile, cache untouched
 ```
 
-`clean` also sweeps stray `.polyglot-cache/*.tmp` files. `doctor` reports where the cache lives and how big it is — `build cache /path/.polyglot-cache (4 object(s), 6.0 KiB)`. The cache is safe to delete at any time — the next build simply repopulates it.
+`clean` also sweeps stray `.polyglot-cache/*.tmp` files. `doctor` reports where the cache lives and how big it is: `build cache /path/.polyglot-cache (4 object(s), 6.0 KiB)`. The cache is safe to delete at any time; the next build simply repopulates it.
 
 ## Parallel Builds
 
@@ -63,7 +63,7 @@ Multiple `-I`/`-D`/`--cc-arg` options are passed to every TU. Linking always hap
 
 ## JSON Output for CI
 
-`polyglot stats --json` emits machine-readable compilation statistics — one stable document per invocation, suitable for parsing in CI or scripts:
+`polyglot stats --json` emits machine-readable compilation statistics, one stable document per invocation, suitable for parsing in CI or scripts:
 
 ```json
 {
@@ -94,6 +94,6 @@ For a CI preflight of the toolchain itself, pair it with `polyglot doctor --stri
 
 ## Next Steps
 
-- [Commands Reference](commands.md) — `build`, `stats`, `clean` flags
-- [Tool Integrations](tools.md) — fmt/tidy/analyze/mca/jit/repl
-- [Optimization Guide](optimization.md) — what `--opt-level` changes
+- [Commands Reference](commands.md): `build`, `stats`, `clean` flags
+- [Tool Integrations](tools.md): fmt/tidy/analyze/mca/jit/repl
+- [Optimization Guide](optimization.md): what `--opt-level` changes

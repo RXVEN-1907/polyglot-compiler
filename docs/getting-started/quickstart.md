@@ -1,6 +1,6 @@
 # Quick Start
 
-Polyglot does **not** require clang to be on your `PATH`. The driver discovers whatever C/C++ toolchain you have — GCC or clang, on or off `PATH` — and reports exactly what it found.
+Polyglot does **not** require clang to be on your `PATH`. The driver discovers whatever C/C++ toolchain you have (GCC or clang, on or off `PATH`) and reports what it found.
 
 ## Install
 
@@ -43,13 +43,13 @@ How toolchain discovery works (first match wins):
 
 1. `POLYGLOT_CC` / `POLYGLOT_CXX` environment variables (absolute or command name)
 2. `polyglot.toml` `[compiler] cc` / `cxx` keys (project builds)
-3. `--compiler {auto,clang,gcc}` — force a backend
-4. `PATH` — clang, clang-NN, gcc, cc
+3. `--compiler {auto,clang,gcc}`: force a backend
+4. `PATH`: clang, clang-NN, gcc, cc
 5. Well-known scan directories: `~/llvm-install/*/bin`, `/usr/lib/llvm-*/bin`, `/usr/local/bin`, `/opt/*/bin`
 
-On the machine above, clang is **not** on `PATH`, but the driver still finds it under `~/llvm-install/` — `doctor` prints the hint so you know it is there. With GCC 13 as the system compiler, everything works; the clang backend simply unlocks LLVM-specific commands such as `analyze`, `jit`, and LLVM-IR `emit-ir`.
+On the machine above, clang is **not** on `PATH`, but the driver still finds it under `~/llvm-install/`; `doctor` prints the hint so you know it is there. With GCC 13 as the system compiler, everything works; the clang backend simply unlocks LLVM-specific commands such as `analyze`, `jit`, and LLVM-IR `emit-ir`.
 
-Add `--strict` to make `doctor` exit `1` when anything is missing — useful as a CI preflight:
+Add `--strict` to make `doctor` exit `1` when anything is missing. Useful as a CI preflight:
 
 ```bash
 polyglot doctor --strict
@@ -61,7 +61,7 @@ Run `polyglot targets` to see which target triples are usable with your backend.
 
 Everything below was executed with the GCC 13 backend; your output may differ in tool paths only.
 
-### 1. `run` — build and execute in one step
+### 1. `run`: build and execute in one step
 
 ```console
 $ polyglot run src/main.c
@@ -70,7 +70,7 @@ Hello from Polyglot!
 
 Use `--quiet` to hide the underlying compiler invocations, and `-v` to see more of them.
 
-### 2. `build` — produce an executable
+### 2. `build`: produce an executable
 
 ```console
 $ polyglot build src/main.c -o hello
@@ -80,7 +80,7 @@ Hello from Polyglot!
 
 Point it at a directory containing `polyglot.toml` (or run it inside one) and it builds the project's `[[bin]]` target. Multiple source files are compiled in parallel with `-j`.
 
-### 3. `check` — syntax-check without producing binaries
+### 3. `check`: syntax-check without producing binaries
 
 ```console
 $ polyglot check src/main.c
@@ -89,18 +89,18 @@ OK   src/main.c
 All files passed syntax check
 ```
 
-### 4. `emit-ir` — look inside the compiler
+### 4. `emit-ir`: look inside the compiler
 
 ```console
 $ polyglot emit-ir src/main.c
 note: GCC backend emits GIMPLE (not LLVM IR) -> /path/to/main.gimple
 ```
 
-The result is written to a file, not stdout: `main.gimple` on the GCC backend (via `-fdump-tree-gimple`), or `main.ll` — true LLVM IR — on the clang backend. Pick the destination with `-o`.
+The result is written to a file, not stdout: `main.gimple` on the GCC backend (via `-fdump-tree-gimple`), or `main.ll` (true LLVM IR) on the clang backend. Pick the destination with `-o`.
 
 Assembly works the same way with `emit-asm` (add `--intel` for Intel syntax), and `stats` prints a compilation time report.
 
-### 5. `init` — scaffold a new project
+### 5. `init`: scaffold a new project
 
 ```console
 $ polyglot init hello --language c
@@ -141,7 +141,7 @@ polyglot clean some-dir # cleans a specific project directory
 
 ## Next Steps
 
-- [All Commands](../user-guide/commands.md) — every command and flag
-- [Tool Integrations](../user-guide/tools.md) — fmt, tidy, analyze, mca, jit, repl
-- [Cache and Parallelism](../user-guide/cache-and-parallelism.md) — incremental builds and `-j`
-- [Configuration](configuration.md) — `polyglot.toml` reference
+- [All Commands](../user-guide/commands.md): every command and flag
+- [Tool Integrations](../user-guide/tools.md): fmt, tidy, analyze, mca, jit, repl
+- [Cache and Parallelism](../user-guide/cache-and-parallelism.md): incremental builds and `-j`
+- [Configuration](configuration.md): `polyglot.toml` reference

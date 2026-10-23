@@ -61,7 +61,7 @@ Polyglot is designed as a **dual-layer architecture** with a clean separation be
 - Temporary file management
 - Wrapping the LLVM auxiliary tools (clang-format, clang-tidy, llvm-mca, lli, clang-repl) and the binutils/LLVM binary tools (nm, objdump, readelf, size, strings, strip, addr2line, c++filt)
 
-**Key structure** (the driver is function-oriented, not class-based — see [Python Driver](python-driver.md)):
+**Key structure** (the driver is function-oriented, not class-based; see [Python Driver](python-driver.md)):
 ```python
 class Toolchain:            # compiler + auxiliary tool discovery
 class BuildCache:           # sha256-keyed incremental object cache
@@ -180,9 +180,9 @@ User Code ──▶ Driver (trusted) ──▶ Compiler (trusted) ──▶ Bina
 
 ## What Is Next
 
-- **Plugin surface growth** — `polyglot plugin list/install/remove/info/publish` already speaks to a registry URL or JSON index; more capability reporting is planned.
-- **Rust driver parity** — the in-process pipeline covers a growing subset of the Python driver's commands.
-- **LSP integration** — `polyglot lsp` launches clangd with project flags today; deeper integration may follow.
+- **Plugin surface growth**: `polyglot plugin list/install/remove/info/publish` already speaks to a registry URL or JSON index; more capability reporting is planned.
+- **Rust driver parity**: the in-process pipeline covers a growing subset of the Python driver's commands.
+- **LSP integration**: `polyglot lsp` launches clangd with project flags today; deeper integration may follow.
 
 ---
 

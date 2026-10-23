@@ -93,7 +93,7 @@ cflags = ["-DTEST_MODE", "-O0", "-g"]
 
 > **Note**: the driver honors `[[bin]]` `name`/`source`, `[language]` and
 > `[compiler]`; the other keys shown above (`cflags`, `ldflags`, `[target]`,
-> `[plugins]`) are reserved and not yet applied at build time — pass those flags
+> `[plugins]`) are reserved and not yet applied at build time. Pass those flags
 > on the command line instead (see [Configuration](../reference/configuration.md)).
 
 ---

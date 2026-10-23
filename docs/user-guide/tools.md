@@ -44,7 +44,7 @@ error: 1 file(s) need formatting
 would reformat: ugly.c
 ```
 
-`--dump-config` prints the fully resolved style as a `.clang-format` document — handy as a starting point for a project style file:
+`--dump-config` prints the fully resolved style as a `.clang-format` document, handy as a starting point for a project style file:
 
 ```console
 $ polyglot fmt --dump-config src/main.c
@@ -99,7 +99,7 @@ Typical findings are null-dereference, use-after-free and uninitialized-value pa
 
 Input is a `.c` source (compiled with your normal `--std`/`--opt-level` options first) or a `.s` assembly file. `--mcpu` selects the CPU model and `--iterations` sets the analysis window (default 3).
 
-Captured example — a sum-of-squares loop compiled with the gcc backend (the tool in this install models an Intel Sapphire Rapids core):
+Captured example: a sum-of-squares loop compiled with the gcc backend (the tool in this install models an Intel Sapphire Rapids core):
 
 ```console
 $ polyglot mca loop.c
@@ -118,7 +118,7 @@ Below the summary, llvm-mca prints a per-instruction table (uOps, latency, recip
 
 ## JIT Execution with `jit`
 
-`polyglot jit` runs LLVM IR or bitcode directly with `lli` — no linking step. Produce IR with the clang backend, then execute it:
+`polyglot jit` runs LLVM IR or bitcode directly with `lli`; there is no linking step. Produce IR with the clang backend, then execute it:
 
 ```console
 $ polyglot --compiler clang emit-ir hello.c -o hello.ll
@@ -130,7 +130,7 @@ The file needs a `main` function; `lli` exits with an error like `Symbols not fo
 
 ## Interactive C++ with `repl`
 
-`polyglot repl` drops you into an interactive `clang-repl` session — a C++ interpreter with full clang semantics, including `#include` and standard-library types:
+`polyglot repl` drops you into an interactive `clang-repl` session, a C++ interpreter with full clang semantics, including `#include` and standard-library types:
 
 ```console
 $ polyglot repl
@@ -144,6 +144,6 @@ Being an interactive terminal session, run it directly in your shell rather than
 
 ## Next Steps
 
-- [Commands Reference](commands.md) — flags for each tool command
-- [Cache and Parallelism](cache-and-parallelism.md) — build cache and `-j`
-- [Optimization Guide](optimization.md) — choosing `--opt-level`
+- [Commands Reference](commands.md): flags for each tool command
+- [Cache and Parallelism](cache-and-parallelism.md): build cache and `-j`
+- [Optimization Guide](optimization.md): choosing `--opt-level`

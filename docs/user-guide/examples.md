@@ -345,7 +345,7 @@ int main() {
 }
 ```
 
-**LLVM IR (clang backend — output is written to a file):**
+**LLVM IR (clang backend; output is written to a file):**
 ```bash
 polyglot --compiler clang emit-ir examples/08_ir_asm/simple.c -o simple.ll
 head -30 simple.ll
@@ -413,10 +413,10 @@ add:
 
 **File:** `examples/09_native_backend/demo.c`
 
-Unlike sections 1–8, which drive clang or gcc to parse C, this example uses
+Unlike sections 1-8, which drive clang or gcc to parse C, this example uses
 the driver's native backend: Polyglot's pure-Rust frontend (lexer → parser →
 type check → Polyglot IR → IR optimizer) emits **LLVM IR as text**, then
-`llc` assembles it and `cc` links the result — clang never parses the C.
+`llc` assembles it and `cc` links the result. Clang never parses the C.
 
 ```
 demo.c → Rust frontend → Polyglot IR → LLVM IR (.ll)
@@ -482,7 +482,7 @@ locals and field access work). See `examples/09_native_backend/README.md`.
 
 ## Complete Example: Calculator
 
-A self-contained program — save it as `calculator.c`:
+A self-contained program. Save it as `calculator.c`:
 
 ```c
 #include <stdio.h>

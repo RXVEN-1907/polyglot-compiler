@@ -144,7 +144,7 @@ Program arguments follow a `--` separator: `polyglot run app.c -- --input f.txt`
 polyglot check [--std STD] ... paths [paths ...]
 ```
 
-`paths` — source files to check (`-fsyntax-only`).
+`paths`: source files to check (`-fsyntax-only`).
 
 ### `emit-ir`
 
@@ -160,7 +160,7 @@ clang emits LLVM IR (`-S -emit-llvm`); gcc emits GIMPLE (`-fdump-tree-gimple`).
 polyglot emit-asm [-o OUTPUT] [--intel] [--std STD] ... paths [paths ...]
 ```
 
-`--intel` — Intel syntax (`-masm=intel`).
+`--intel`: Intel syntax (`-masm=intel`).
 
 ### `preproc`
 
@@ -230,7 +230,7 @@ Interactive clang-repl; extra arguments go after `--`.
 polyglot jit file
 ```
 
-`file` — LLVM IR (`.ll`) or bitcode (`.bc`); runs it with `lli`. Extra `lli` arguments go after `--`.
+`file`: LLVM IR (`.ll`) or bitcode (`.bc`); runs it with `lli`. Extra `lli` arguments go after `--`.
 
 ### `mca`
 
@@ -238,7 +238,7 @@ polyglot jit file
 polyglot mca [--iterations ITERATIONS] [--mcpu MCPU] [--std STD] ... file
 ```
 
-`file` — `.c` source or `.s` assembly. `--iterations` defaults to 3.
+`file`: `.c` source or `.s` assembly. `--iterations` defaults to 3.
 
 ### `analyze`
 
@@ -254,7 +254,7 @@ clang static analyzer; requires the clang backend.
 polyglot watch [--timeout TIMEOUT] [--std STD] ... file
 ```
 
-`--timeout N` — exit after N seconds (`0` = watch forever).
+`--timeout N`: exit after N seconds (`0` = watch forever).
 
 ### `stats`
 
@@ -298,7 +298,7 @@ Analyzes source files or directories and suggests optimization and configuration
 polyglot inspect [--strings] [--json] [--std STD] ... [paths ...]
 ```
 
-Correlated view of binary information (symbols, sections, sizes, strings) across the inspection tools in one pass. `paths` — object files or executables.
+Correlated view of binary information (symbols, sections, sizes, strings) across the inspection tools in one pass. `paths` are object files or executables.
 
 ### `secopt`
 
@@ -346,7 +346,7 @@ Manages JSON-RPC plugins: `list` shows installed, builtin and registry plugins; 
 polyglot compile-commands [-o FILE] [--target TARGET] [--shared] [--static-lib] [--std STD] ... [paths ...]
 ```
 
-Writes a `compile_commands.json` (default name) with the full command line for every source, for clangd, clang-tidy and other tooling. `paths` — source files or directories (default: current directory).
+Writes a `compile_commands.json` (default name) with the full command line for every source, for clangd, clang-tidy and other tooling. `paths`: source files or directories (default: current directory).
 
 ### `diagnose`
 
@@ -378,7 +378,7 @@ Lists symbols in object files or executables. `-u` shows only undefined symbols,
 polyglot fuzz --entry FN [--corpus DIR] [--runs RUNS] [--json] [--std STD] ... [-L DIR] [-l NAME] file
 ```
 
-Fuzzes one function with libFuzzer (clang backend only). `FN` must have the exact signature `int FN(const unsigned char *data, size_t size)` — a harness defining `LLVMFuzzerTestOneInput` is generated and compiled together with `file`. `--runs` defaults to 1000; `--corpus` seeds and collects inputs.
+Fuzzes one function with libFuzzer (clang backend only). `FN` must have the exact signature `int FN(const unsigned char *data, size_t size)`. A harness defining `LLVMFuzzerTestOneInput` is generated and compiled together with `file`. `--runs` defaults to 1000; `--corpus` seeds and collects inputs.
 
 ### `preview`
 
@@ -410,7 +410,7 @@ Analyzes compilation errors and applies common safe fixes (missing semicolons, b
 polyglot objdump [OBJDUMP FLAGS] [--json] [--no-cache] [paths ...]
 ```
 
-Wraps `objdump` for object files and executables: `-d`/`-D` (disassemble), `-f`/`-a` (file/archive headers), `--section-headers`, `-j SECTION`, `-r`/`-R` (relocations), `-s`, `-t` (symbol table), `-x`, and the usual flags — passthrough to the underlying tool.
+Wraps `objdump` for object files and executables: `-d`/`-D` (disassemble), `-f`/`-a` (file/archive headers), `--section-headers`, `-j SECTION`, `-r`/`-R` (relocations), `-s`, `-t` (symbol table), `-x`, and the usual flags, all passthrough to the underlying tool.
 
 ### `bench`
 
@@ -426,7 +426,7 @@ Builds once, then times repeated program runs (`--runs`, default 5). `--args` pa
 polyglot readelf [READELF FLAGS] [--json] [--no-cache] [paths ...]
 ```
 
-Wraps `readelf` for ELF files: `-a` (everything), `-h` (file header), `-l` (program headers), `-S` (sections), `-s` (symbols), `-r`/`-R` (relocations), `-d` (dynamic), `-V` (version info), and the usual flags — passthrough to the underlying tool.
+Wraps `readelf` for ELF files: `-a` (everything), `-h` (file header), `-l` (program headers), `-S` (sections), `-s` (symbols), `-r`/`-R` (relocations), `-d` (dynamic), `-V` (version info), and the usual flags, all passthrough to the underlying tool.
 
 ### `pgo`
 
@@ -514,7 +514,7 @@ Single programmable interface over all inspection capabilities (symbols, sizes, 
 polyglot verify [--std STD] [--warn LEVEL] [--werror] [--debug] [--sanitize LIST] [-I DIR] [-D NAME[=VAL]] [--cc-arg ARG]
 ```
 
-Compiles a tiny built-in program to an object file with the resolved toolchain and reports success — the quickest end-to-end health check that the compiler actually produces valid objects (complements `doctor`, which inventories the environment).
+Compiles a tiny built-in program to an object file with the resolved toolchain and reports success: the quickest end-to-end health check that the compiler actually produces valid objects (complements `doctor`, which inventories the environment).
 
 ---
 

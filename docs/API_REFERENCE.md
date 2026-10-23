@@ -1,7 +1,7 @@
 # Polyglot API Reference
 
 !!! note
-    This document covers only the original command subset. The maintained CLI reference lives in the mkdocs tree: `docs/reference/cli.md` (and `docs/user-guide/commands.md`) — the driver now ships 49 commands. The Rust library examples below were updated for the v0.3.0 rebuild (the experimental `polyglot-mlir`, `polyglot-cache` and `polyglot-registry` crates were removed).
+    This document covers only the original command subset. The maintained CLI reference lives in the mkdocs tree: `docs/reference/cli.md` (and `docs/user-guide/commands.md`). The driver now ships 49 commands. The Rust library examples below were updated for the v0.3.0 rebuild (the experimental `polyglot-mlir`, `polyglot-cache` and `polyglot-registry` crates were removed).
 
 ## Python Driver CLI
 

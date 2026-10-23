@@ -6,7 +6,7 @@
 
 ## 🎯 What is Polyglot?
 
-Polyglot is a **compiler driver** that provides a unified, developer-friendly interface for compiling C and C++ (and Rust) programs. It wraps whichever toolchain it finds — GCC or clang, on or off `PATH` — and delivers a consistent CLI with powerful inspection capabilities, letting you see exactly what the compiler is doing at every stage.
+Polyglot is a **compiler driver** that provides a unified, developer-friendly interface for compiling C and C++ (and Rust) programs. It wraps whichever toolchain it finds (GCC or clang, on or off `PATH`) and delivers a consistent CLI with inspection capabilities. You can see what the compiler is doing at every stage.
 
 ### Why Polyglot?
 
@@ -24,7 +24,7 @@ Polyglot is a **compiler driver** that provides a unified, developer-friendly in
 
 - 🔨 **Multi-language**: C, C++, and Rust projects, with GCC/clang toolchain auto-discovery (works with clang installed off `PATH`)
 - ⚡ **6 Optimization Levels**: `none`, `less`, `default`, `aggressive`, `size`, `size-aggressive`
-- 🎯 **5 Named Targets**: x86_64, ARM64, ARM32, RISC-V, WASM — `polyglot targets` shows availability
+- 🎯 **5 Named Targets**: x86_64, ARM64, ARM32, RISC-V, WASM. `polyglot targets` shows availability
 - 🔍 **Syntax Check & Static Analysis**: `check`, plus clang's `--analyze` via `analyze`
 - 📄 **IR Emission**: LLVM IR (clang) or GIMPLE (gcc) with `emit-ir`
 - ⚙️ **Assembly & Preprocessor**: `emit-asm --intel`, `preproc`, `deps`
@@ -133,7 +133,7 @@ Polyglot uses a **dual-layer architecture**:
 
 ## 🤝 Contributing
 
-We welcome contributions! See the [Contributing Guide](https://github.com/RXVEN-1907/polyglot-compiler/blob/master/CONTRIBUTING.md).
+Contributions are welcome. See the [Contributing Guide](https://github.com/RXVEN-1907/polyglot-compiler/blob/master/CONTRIBUTING.md).
 
 - 🐛 [Report Bug](https://github.com/RXVEN-1907/polyglot-compiler/issues/new?template=bug_report.md)
 - ✨ [Request Feature](https://github.com/RXVEN-1907/polyglot-compiler/issues/new?template=feature_request.md)
@@ -149,6 +149,6 @@ MIT License - see [LICENSE](https://github.com/RXVEN-1907/polyglot-compiler/blob
 
 ## 🙏 Acknowledgments
 
-- **LLVM Team** - Incredible compiler infrastructure
-- **Clang Team** - Production-grade C/C++ frontend
-- **Rust Community** - Excellent ecosystem
+- **LLVM Team** - Compiler infrastructure
+- **Clang Team** - C/C++ frontend
+- **Rust Community** - Ecosystem and tooling

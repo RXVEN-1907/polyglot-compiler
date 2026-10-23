@@ -3,7 +3,7 @@
 This example demonstrates the driver's **native backend**: a fully Rust-driven
 pipeline that compiles C with Polyglot's own frontend (parser, type checker,
 Polyglot IR, IR optimizer), emits **LLVM IR as text**, and finishes the job
-with `llc` and the system C compiler — **without ever using clang to parse C**.
+with `llc` and the system C compiler, **without ever using clang to parse C**.
 
 Compare with `examples/08_ir_asm/`, which reaches LLVM IR through the *clang*
 backend (`-S -emit-llvm`). Here clang only appears as the final linker.
@@ -34,7 +34,7 @@ demo.c
 
 ## The example
 
-**File:** `demo.c` — recursion (`factorial`), a loop with arithmetic
+**File:** `demo.c`: recursion (`factorial`), a loop with arithmetic
 (`sum_squares`), an if/return chain (`classify`), and `printf` calls.
 
 ## Verified commands
@@ -118,6 +118,6 @@ const @.LC1: char size=22 init="sum_squares(10) = %d\n" (22)
   only calls that pass or return structs by value are rejected.
 - **C subset.** The Rust frontend handles the same subset as the other
   examples (integers, chars, pointers, arrays, control flow, functions);
-  see `examples/01`–`05`.
+  see `examples/01`-`05`.
 - `llc` and a system C compiler must be available (the driver finds LLVM 17 via
   its install prefix).

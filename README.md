@@ -2,7 +2,7 @@
   <img src="docs/logo.svg" alt="polyglot: a bold P with a chevron resting in its counter" width="150">
   <h1>polyglot</h1>
   <p><em>many languages. one shape.</em></p>
-  <p><strong>A compiler driver for every C/C++ toolchain you have — and a compiler of its own that shows its work.</strong></p>
+  <p><strong>A compiler driver for every C/C++ toolchain you have, and a compiler of its own that shows its work.</strong></p>
   <p>
     <a href="https://github.com/RXVEN-1907/polyglot-compiler/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/RXVEN-1907/polyglot-compiler/actions/workflows/ci.yml/badge.svg"></a>
     <a href="https://github.com/RXVEN-1907/polyglot-compiler/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/RXVEN-1907/polyglot-compiler?sort=semver"></a>
@@ -15,14 +15,14 @@
 
 ---
 
-You already own the pieces — gcc, clang, llvm-nm, objdump, gdb,
+You already own the pieces: gcc, clang, llvm-nm, objdump, gdb,
 clang-tidy. What nobody gave you was **one command that uses them
 together**: cached parallel builds, one vocabulary for binary
 inspection, cross targets listed with the exact line that unlocks them,
 machine-readable output everywhere. polyglot is that command.
 
-And because a driver that only delegates is half a story, the repo also
-ships a **built-in compiler** — a from-scratch Rust pipeline that takes
+And a driver that only delegates is half a story. The repo also
+ships a **built-in compiler**, a from-scratch Rust pipeline that takes
 a subset of C from source text to a running binary and narrates every
 stage on the way.
 
@@ -43,7 +43,7 @@ one C compiler. Prebuilt Rust binaries ship on every
 
 <div align="center"><img src="docs/svg/div-forge.svg" alt="" width="100%"></div>
 
-## Forge — build and run
+## Forge: build and run
 
 `polyglot build` wraps gcc or clang and adds what they don't give you:
 a sha256-keyed object cache so unchanged translation units never
@@ -51,16 +51,16 @@ recompile, `-j N` parallelism per TU, sanitizers as one flag, warnings
 as a level, and honest cross-target reporting (`polyglot targets` shows
 each triple's status and the exact apt line to unlock it).
 
-<div align="center"><img src="docs/svg/cache-chart.svg" alt="bar pair: the same 61-TU rebuild at 2278 ms without the cache and 873 ms with it — 2.8x faster" width="700"></div>
+<div align="center"><img src="docs/svg/cache-chart.svg" alt="bar pair: the same 61-TU rebuild at 2278 ms without the cache and 873 ms with it, 2.8x faster" width="700"></div>
 
-Projects are a `polyglot.toml` away — every `[[bin]]` and `[[lib]]`
+Projects are a `polyglot.toml` away. Every `[[bin]]` and `[[lib]]`
 target builds in parallel from cache with `polyglot build ./project`,
 and `polyglot init` scaffolds the layout. `run`, `watch`, `bench`,
 `clean`, `check` round out the loop.
 
 <div align="center"><img src="docs/svg/div-inspect.svg" alt="" width="100%"></div>
 
-## Inspect — read any binary
+## Inspect: read any binary
 
 One vocabulary over the binutils zoo, `--json` everywhere:
 
@@ -81,9 +81,9 @@ gcc's and clang's diagnostics on the same file.
 
 <div align="center"><img src="docs/svg/div-transmute.svg" alt="" width="100%"></div>
 
-## Transmute — the built-in pipeline
+## Transmute: the built-in pipeline
 
-The Rust workspace is a real compiler for a subset of C — preprocessor,
+The Rust workspace is a real compiler for a subset of C: preprocessor,
 lexer, parser, name resolution and type checking, IR with optimization
 passes, LLVM IR, object files. `polyglot-driver build --backend native`
 compiles end to end; its *build* needs no system LLVM (objects go
@@ -92,13 +92,13 @@ fallback when `llc` is absent).
 
 <div align="center"><img src="docs/svg/pipeline-metro.svg" alt="metro line with eight stations from source through lexing, parsing, semantic analysis, IR, optimization, LLVM, to a binary" width="860"></div>
 
-`transmute-internal` narrates the whole journey, stage by stage — the
-command to reach for when you want to *see* compilation happen:
+`transmute-internal` narrates the whole journey, stage by stage. It is
+the command to reach for when you want to *see* compilation happen:
 
 <div align="center"><img src="docs/gifs/transmute.gif" alt="terminal session: the six pipeline stages narrated for fib.c, then the binary printing 55" width="820"></div>
 
 It is a teaching-grade compiler and says so: functions, structs,
-pointers, control flow, a full test suite — production builds go
+pointers, control flow, a full test suite. Production builds go
 through gcc/clang. Its job is to make the pipeline legible.
 
 ## All 49 commands
@@ -140,7 +140,7 @@ polyglot-clang  0.3.0    builtin  .../polyglot-clang
 | narrated pipeline | `transmute`, step by step | none | none | side-by-side, web only |
 | install | one binary-free pip package | system package | system package | hosted / docker |
 
-ccache is the cache king — polyglot's cache is for when you also want
+ccache is the cache king. polyglot's cache is for when you also want
 the inspection, the IR views, and the pipeline in the same CLI.
 
 ## CI/CD integration
@@ -160,7 +160,7 @@ flags the build used.
 Tag a version and CI builds the Rust driver for Linux (x86-64
 glibc/musl, aarch64, armv7, riscv64, s390x, loongarch64), Windows
 (x86-64 + ARM64), and macOS (Apple silicon, Intel, universal2), plus
-the `polyglot-clang` plugin binary — each archive checksummed and
+the `polyglot-clang` plugin binary, each archive checksummed and
 smoke-checked. The Python driver needs no binary: `pipx` or
 [`install.sh`](install.sh) is the whole install.
 
@@ -169,7 +169,7 @@ smoke-checked. The Python driver needs no binary: `pipx` or
 <details>
 <summary><strong>Does it replace gcc/clang?</strong></summary>
 
-No — it drives them. Your system compiler does the compiling; polyglot
+No. It drives them. Your system compiler does the compiling; polyglot
 adds caching, parallelism, uniform flags, inspection, and output
 formats. The built-in pipeline is the one place polyglot compiles C
 itself (a teaching-grade subset), clearly labeled.
@@ -194,7 +194,7 @@ plus `~/.polyglot/` for plugins and the inspection cache.
 <details>
 <summary><strong>Why is the driver Python if the project is Rust?</strong></summary>
 
-The Rust workspace *is* the compiler — syntax, sema, IR, codegen, the
+The Rust workspace *is* the compiler: syntax, sema, IR, codegen, the
 driver binary, and the plugin are all Rust. The 49-command surface is a
 Python CLI because it is glue over system tools, stdlib-only and
 instant to extend; the split is deliberate and both doors are
@@ -222,8 +222,8 @@ Two front doors, one repo. Full map with a paragraph per crate:
 CI gates formatting, clippy (`-D warnings`, all targets), both test
 suites, the audit, and a strict mkdocs build. Add a command to
 `polyglot_lib/commands/`, a pass to `polyglot-ir`, or pick something
-from the tracker — see [CONTRIBUTING.md](CONTRIBUTING.md).
+from the tracker. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

@@ -17,9 +17,9 @@ wasm32-wasip1                      unavailable      wasm linking requires wasm-l
 
 Statuses:
 
-- `native` — this triple matches the host; the discovered backend handles it directly.
-- `needs-cross-gcc` — the triple is recognized, but a matching cross toolchain must be installed (see the GCC limitation below).
-- `unavailable` — recognized, but the linker/tools it needs are missing (wasm needs `wasm-ld`/lld).
+- `native`: this triple matches the host; the discovered backend handles it directly.
+- `needs-cross-gcc`: the triple is recognized, but a matching cross toolchain must be installed (see the GCC limitation below).
+- `unavailable`: recognized, but the linker/tools it needs are missing (wasm needs `wasm-ld`/lld).
 
 ## Supported Targets
 
@@ -114,7 +114,7 @@ POLYGLOT_CC=/usr/bin/riscv64-linux-gnu-gcc polyglot build hello.c -o hello-riscv
 
 ### `wasm32-wasip1`
 
-**WebAssembly with WASI preview 1.** Reported `unavailable` until `wasm-ld`/lld is on the PATH or in a scan directory — a full LLVM install provides it.
+**WebAssembly with WASI preview 1.** Reported `unavailable` until `wasm-ld`/lld is on the PATH or in a scan directory. A full LLVM install provides it.
 
 ```bash
 polyglot --compiler clang --target wasm32-wasip1 build hello.c -o hello.wasm
